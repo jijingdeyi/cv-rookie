@@ -283,7 +283,7 @@ class Original_2_Trans(nn.Module):
 
 
 
-if __name__=="__main__":
+if __name__ == "__main__":
     trans = Original_2_Trans().cuda()
     tensor_x = torch.randn(size=[12, 138, 512]).cuda()
     tensor_y = torch.randn(size=[12, 138, 512]).cuda()
