@@ -531,7 +531,7 @@ class DE_Decoder(nn.Module):
             nn.LeakyReLU(),
             nn.ReflectionPad2d(1),
             nn.Conv2d(int(dim)//2, out_channels, kernel_size=3,
-                    stride=1, padding=0, bias=bias),
+                    stride=1, padding=0, bias=bias), 
             )
         self.sigmoid = nn.Sigmoid()         
 
