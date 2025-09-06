@@ -43,9 +43,12 @@ class Sobelxy(nn.Module):
 
 def cc(img1: torch.Tensor, img2: torch.Tensor) -> torch.Tensor:
     """
-    Correlation coefficient for (B, C, H, W) image; 
-    
+    Correlation coefficient for images
+
+    Shape: (B, C, H, W) 
+
     Type: torch.float32 
+    
     Range: [0.,1.]
     """
     eps = torch.finfo(torch.float32).eps

@@ -506,16 +506,16 @@ class ModelEMA:
 
     def __init__(self, model, decay=0.9999, tau=2000, updates=0):
         # Create EMA
-        self.ema = deepcopy(de_parallel(model)).eval()  # FP32 EMA
+        self.ema = deepcopy(de_parallel(model)).eval()  # EMA copy of model
         self.updates = updates  # number of EMA updates
-        self.decay = lambda x: decay * (1 - math.exp(-x / tau))  # decay exponential ramp (to help early epochs)
+        self.decay = lambda x: decay * (1 - math.exp(-x / tau))  # dynamic decay rate to help early epochs
         for p in self.ema.parameters():
             p.requires_grad_(False)
 
     def update(self, model):
         # Update EMA parameters
         self.updates += 1
-        d = self.decay(self.updates)
+        d = self.decay(self.updates)   # get the decay value
 
         msd = de_parallel(model).state_dict()  # model state_dict
         for k, v in self.ema.state_dict().items():

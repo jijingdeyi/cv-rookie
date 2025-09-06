@@ -558,7 +558,7 @@ def check_dataset(data, autodownload=True) -> dict:
 
 def check_amp(model):
     # Check PyTorch Automatic Mixed Precision (AMP) functionality. Return True on correct operation
-    from models.common import AutoShape, DetectMultiBackend
+    from models.common import AutoShape
 
     def amp_allclose(model, im):
         # All close FP32 vs AMP results
@@ -575,7 +575,7 @@ def check_amp(model):
     f = ROOT / 'data' / 'images' / 'bus.jpg'  # image to check
     im = f if f.exists() else 'https://ultralytics.com/images/bus.jpg' if check_online() else np.ones((640, 640, 3))
     try:
-        #assert amp_allclose(deepcopy(model), im) or amp_allclose(DetectMultiBackend('yolo.pt', device), im)
+        assert amp_allclose(deepcopy(model), im)
         LOGGER.info(f'{prefix}checks passed ✅')
         return True
     except Exception:
