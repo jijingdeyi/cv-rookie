@@ -76,24 +76,17 @@ def ycbcr_to_rgb(y, cb, cr):
     return rgb_image
 
 
-def fuse_cb_cr(Cb1,Cr1,Cb2,Cr2):
-    H, W = Cb1.shape
-    Cb = np.ones((H, W),dtype=np.float32)
-    Cr = np.ones((H, W),dtype=np.float32)
+def fuse_cb_cr(Cb1, Cr1, Cb2, Cr2):
+    # Cb 通道
+    w1 = np.abs(Cb1 - 128)
+    w2 = np.abs(Cb2 - 128)
+    Cb = np.where((w1 == 0) & (w2 == 0), 128,
+                  (Cb1 * w1 + Cb2 * w2) / (w1 + w2 + 1e-8))  # 防止除 0
 
-    for k in range(H):
-        for n in range(W):
-            if abs(Cb1[k, n] - 128) == 0 and abs(Cb2[k, n] - 128) == 0:
-                Cb[k, n] = 128
-            else:
-                middle_1 = Cb1[k, n] * abs(Cb1[k, n] - 128) + Cb2[k, n] * abs(Cb2[k, n] - 128)
-                middle_2 = abs(Cb1[k, n] - 128) + abs(Cb2[k, n] - 128)
-                Cb[k, n] = middle_1 / middle_2
+    # Cr 通道
+    w3 = np.abs(Cr1 - 128)
+    w4 = np.abs(Cr2 - 128)
+    Cr = np.where((w3 == 0) & (w4 == 0), 128,
+                  (Cr1 * w3 + Cr2 * w4) / (w3 + w4 + 1e-8))
 
-            if abs(Cr1[k, n] - 128) == 0 and abs(Cr2[k, n] - 128) == 0:
-                Cr[k, n] = 128
-            else:
-                middle_3 = Cr1[k, n] * abs(Cr1[k, n] - 128) + Cr2[k, n] * abs(Cr2[k, n] - 128)
-                middle_4 = abs(Cr1[k, n] - 128) + abs(Cr2[k, n] - 128)
-                Cr[k, n] = middle_3 / middle_4
-    return Cb, Cr
+    return Cb.astype(np.float32), Cr.astype(np.float32)
