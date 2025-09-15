@@ -1063,8 +1063,8 @@ class SharedFeatureExtractor(nn.Module):
         self.conv_3 = ConvLayer(32 + 32 + 2, 32, s, stride, isLast=False)
 
     def forward(self, x):
-        x_1 = self.conv_1(x)  # Z_0
-        x_2 = self.conv_2(torch.cat((x, x_1), 1))  # Z_0
+        x_1 = self.conv_1(x)  # Z_0  
+        x_2 = self.conv_2(torch.cat((x, x_1), 1))  # Z_0 
         x_3 = self.conv_3(torch.cat((x, x_1, x_2), 1))  # Z_0
         return torch.cat((x, x_1, x_2, x_3), 1)
 
@@ -1097,7 +1097,25 @@ class ReconstructionDecoder(nn.Module):
 
 
 class TwoBranchesFusionNet(nn.Module):
+    """ Example:
+    model = TwoBranchesFusionNet(3, 64, 1:channel, 1).cuda(3)
+
+    input_size=[(1, 1, 1024, 1024), (1, 1, 1024, 1024)]
+
+    正常的前向过程不包含 decoder， 需要手动调用 forward_rec_decoder 或 forward_mixed_decoder
+    fea_com = model.forward_encoder(img_ir, img_vi)    
+    fea_fused = model.forward_MultiTask_branch(fea_com_ivif = fea_com, fea_com_mfif = fea_com)            
+    out_y_or_gray = model.forward_mixed_decoder(fea_com, fea_fused); 
+    out_x_rec = model.forward_rec_decoder(fea_com);
+    """
     def __init__(self, s, n, channel, stride):
+        """
+        s: filter size, kernel size 
+        n: number of filters, number of features
+        channel: number of input channels of images
+        stride: stride of convolution
+
+        """
         super(TwoBranchesFusionNet, self).__init__()
 
         self.getSharedFeatures = SharedFeatureExtractor(s, n, channel, stride)
@@ -1112,8 +1130,8 @@ class TwoBranchesFusionNet(nn.Module):
         self.cnnDecoder = CNNspecificDecoder(embed_size, num_decoder_layers)
 
     def forward_encoder(self, x, y):
-        x = torch.cat((x, y), 1)
-        fea_com = self.getSharedFeatures(x)
+        x = torch.cat((x, y), 1) # 
+        fea_com = self.getSharedFeatures(x) 
         return fea_com
 
     # trainingTag = 1, IVIF task; trainingTag = 2, MFIF task;
