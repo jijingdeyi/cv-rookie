@@ -77,6 +77,7 @@ def ycbcr_to_rgb(y, cb, cr):
 
 
 def fuse_cb_cr(Cb1, Cr1, Cb2, Cr2):
+    # [0, 255] 范围内的 Cb, Cr 通道
     # Cb 通道
     w1 = np.abs(Cb1 - 128)
     w2 = np.abs(Cb2 - 128)
