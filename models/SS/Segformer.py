@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from backbone_SS import mit_b0, mit_b1, mit_b2, mit_b3, mit_b4, mit_b5
+from models.SS.backbone_SS import mit_b0, mit_b1, mit_b2, mit_b3, mit_b4, mit_b5
 
 class MLP(nn.Module):
     """

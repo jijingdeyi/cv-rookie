@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 import os
 from utils.general import xywh2xyxy
-from utils.metrics import bbox_iou
+from Metric.metrics import bbox_iou
 from utils.tal.anchor_generator import dist2bbox, make_anchors, bbox2dist
 from utils.tal.assigner import TaskAlignedAssigner
 from utils.torch_utils import de_parallel
