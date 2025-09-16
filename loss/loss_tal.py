@@ -26,6 +26,22 @@ def smooth_BCE(eps: float = 0.1) -> tuple[float, float]:
     """
     return 1.0 - 0.5 * eps, 0.5 * eps
 
+def CE_Loss(inputs, target, ignore_index=-100, align_corners=False):
+    """
+    inputs: [N, C, H, W]  —— 未经过 softmax 的 logits
+    target: [N, H, W]     —— 每像素类别 id，范围 [0, C-1]
+    """
+    n, c, h, w = inputs.shape
+    nt, ht, wt = target.shape
+    assert n == nt, f"Batch 大小不一致: inputs={n}, target={nt}"
+    
+    # 任一维度不相等就插值到 target 尺寸
+    if (h, w) != (ht, wt):
+        inputs = F.interpolate(inputs, size=(ht, wt), mode="bilinear", align_corners=align_corners)
+
+    # CrossEntropyLoss 支持 [N, C, H, W] x [N, H, W] 直接计算
+    loss = F.cross_entropy(inputs, target.long(), ignore_index=ignore_index)
+    return loss
 
 class VarifocalLoss(nn.Module):
     """
