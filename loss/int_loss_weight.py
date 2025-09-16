@@ -22,7 +22,8 @@ class _GradKernel(nn.Module):
         x = F.pad(x, (1,1,1,1), mode="reflect")   # ReflectionPad2d(1)
         return F.conv2d(x, k, stride=1, padding=0, groups=c)
 
-class GIFNetItem1Loss(nn.Module):
+
+class GradGuidedIntLoss(nn.Module):
     """
     item1_IM_loss_cnn = w_ir * MSE(out_f, ir) + w_vi * MSE(out_f, vi)
     其中 w_* 由 DenseNet121 特征的梯度能量经 softmax 得到
@@ -93,3 +94,83 @@ class GIFNetItem1Loss(nn.Module):
         # item1: 加权 MSE
         loss_item1 = w_ir * self.mse(out_f, batch_ir) + w_vi * self.mse(out_f, batch_vi)
         return loss_item1, w_ir.detach(), w_vi.detach()
+
+
+class PixelWiseIntLoss(nn.Module):
+    """
+    我的改进版：
+    逐像素权重版本：
+      w_map = softmax([E_ir(x,y), E_vi(x,y)], dim=1)  ⟹  w_ir(x,y), w_vi(x,y)
+      loss = mean_{N,H,W} [ w_ir * (out - ir)^2 + w_vi * (out - vi)^2 ]
+    其中 E_* 为 DenseNet 各层特征经 gradient^2 后在通道维求均值、上采样到输入尺寸再平均。
+    """
+    def __init__(self):
+        super().__init__()
+        backbone = models.densenet121(pretrained=True)
+        feats = list(backbone.features.children())
+        # 与你片段保持一致的分段
+        self.f1 = nn.Sequential(*feats[:4])
+        self.f2 = nn.Sequential(*feats[4:6])
+        self.f3 = nn.Sequential(*feats[6:8])
+        self.f4 = nn.Sequential(*feats[8:10])
+        self.f5 = nn.Sequential(*feats[10:11])
+
+        for m in [self.f1, self.f2, self.f3, self.f4, self.f5]:
+            m.eval()
+            for p in m.parameters():
+                p.requires_grad_(False)
+
+        self.grad = _GradKernel()
+
+    @torch.no_grad()
+    def _energy_map(self, x3: torch.Tensor, out_size) -> torch.Tensor:
+        """
+        x3: [N,3,H,W]
+        返回: E_map [N,1,H,W] —— 各层 grad^2 的通道均值图，上采样到 out_size 并平均
+        """
+        l1 = self.f1(x3)
+        l2 = self.f2(l1)
+        l3 = self.f3(l2)
+        l4 = self.f4(l3)
+        l5 = self.f5(l4)
+
+        def e_map(layer):
+            g2 = self.grad(layer)**2                 # [N,C,h,w]
+            e  = g2.mean(dim=1, keepdim=True)        # 通道均值 -> [N,1,h,w]
+            e  = F.interpolate(e, size=out_size, mode="bilinear", align_corners=False)
+            return e
+
+        E = (e_map(l1) + e_map(l2) + e_map(l3) + e_map(l4) + e_map(l5)) / 5.0  # [N,1,H,W]
+        return E
+
+    def forward(self, out_f: torch.Tensor, ir: torch.Tensor, vi: torch.Tensor):
+        """
+        out_f, ir, vi: [N,1,H,W] 单通道张量
+        返回: loss, w_ir_map, w_vi_map  （权重图已 detach 便于观测）
+        """
+        assert out_f.shape == ir.shape == vi.shape and out_f.size(1) == 1, "expect [N,1,H,W]"
+
+        N, _, H, W = out_f.shape
+        device = out_f.device
+
+        # 复制到 3 通道以喂 DenseNet
+        ir3 = ir.repeat(1, 3, 1, 1).to(device)
+        vi3 = vi.repeat(1, 3, 1, 1).to(device)
+
+        # 逐像素能量图（不进主干计算图）
+        E_ir = self._energy_map(ir3, out_size=(H, W))   # [N,1,H,W]
+        E_vi = self._energy_map(vi3, out_size=(H, W))   # [N,1,H,W]
+
+        # 在 dim=1（2 类）上做 softmax，得到逐像素权重
+        stacked = torch.cat([E_ir, E_vi], dim=1)        # [N,2,H,W]
+        weights = torch.softmax(stacked, dim=1)         # [N,2,H,W]
+        w_ir = weights[:, :1]                           # [N,1,H,W]
+        w_vi = weights[:, 1:]                           # [N,1,H,W]
+
+        # 逐像素加权 MSE（不用 F.mse_loss，自己做 elementwise 再平均）
+        se_ir = (out_f - ir)**2                         # [N,1,H,W]
+        se_vi = (out_f - vi)**2
+        loss_map = w_ir * se_ir + w_vi * se_vi          # [N,1,H,W]
+        loss = loss_map.mean()                          # mean over N, C, H, W
+
+        return loss, w_ir.detach(), w_vi.detach()
