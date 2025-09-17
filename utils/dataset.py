@@ -43,16 +43,22 @@ def read_data(root: str) -> list[list[str]]:
 
 
 def image_read(path, mode='RGB'):
-    """read image from path, and convert to specified mode.
     """
-    img_BGR = cv2.imread(path).astype('float32')
+    read image from path, and convert to specified mode.
+    """
+    img_BGR = cv2.imread(path)  
+    # 默认 shape: (H, W, 3)，dtype=uint8，通道顺序 BGR
+    
     assert mode in ['RGB','GRAY','YCrCb'], 'mode error'
     if mode == 'RGB':
         img = cv2.cvtColor(img_BGR, cv2.COLOR_BGR2RGB)
+        # shape: (H, W, 3)，dtype=uint8，通道顺序 RGB
     elif mode == 'GRAY':
         img = cv2.cvtColor(img_BGR, cv2.COLOR_BGR2GRAY)
+        # shape: (H, W)，dtype=uint8，单通道灰度
     elif mode == 'YCrCb':
         img = cv2.cvtColor(img_BGR, cv2.COLOR_BGR2YCrCb)
+        # shape: (H, W, 3)，dtype=uint8，通道顺序 Y, Cr, Cb
     return img
 
 
