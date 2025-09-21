@@ -5,7 +5,7 @@ import os
 from torch.utils.data import Dataset
 from torchvision.transforms import ToTensor
 
-from utils.dataset import image_read
+from data.dataset import image_read
 
 
 class Trainset_Seg(Dataset):
