@@ -85,6 +85,17 @@ class SmoothedValue(object):
 
 
 class MetricLogger(object):
+    """use it like tqdm
+
+    metric_logger = MetricLogger(delimiter="  ") # delimiter: str, the separator of different metrics
+    metric_logger.update(loss=1, lr=0.1) # update metrics
+    print(metric_logger) # print all the metrics
+    for i, data in enumerate(metric_logger.log_every(data_loader, 10, header="Epoch: [{}]".format(epoch))):
+        # do something for data
+    metric_logger.synchronize_between_processes() # if use distributed training, synchronize the metrics among different processes
+    print("Averaged stats:", metric_logger) # print averaged metrics
+    metric_logger.add_meter("loss", SmoothedValue(window_size=10)) # add a new metric 
+    """
     def __init__(self, delimiter="\t"):
         self.meters = defaultdict(SmoothedValue)
         self.delimiter = delimiter
@@ -244,7 +255,7 @@ def init_distributed_mode(args):
         os.environ["WORLD_SIZE"] = str(args.world_size)
         # ["RANK", "WORLD_SIZE", "MASTER_ADDR", "MASTER_PORT", "LOCAL_RANK"]
     elif "RANK" in os.environ and "WORLD_SIZE" in os.environ:
-        print(os.environ)
+        # print(os.environ)
         args.rank = int(os.environ["RANK"])
         args.world_size = int(os.environ["WORLD_SIZE"])
         args.gpu = int(os.environ["LOCAL_RANK"])
@@ -295,14 +306,14 @@ class NativeScalerWithGradNormCount:
         create_graph=False,
         update_grad=True,
     ):
-        self._scaler.scale(loss).backward(create_graph=create_graph)
+        self._scaler.scale(loss).backward(create_graph=create_graph) # type: ignore
         if update_grad:
             if clip_grad is not None:
                 assert parameters is not None
                 self._scaler.unscale_(
                     optimizer
                 )  # unscale the gradients of optimizer's assigned params in-place
-                norm = torch.nn.utils.clip_grad_norm_(parameters, clip_grad)
+                norm = torch.nn.utils.clip_grad.clip_grad_norm_(parameters, clip_grad)
             else:
                 self._scaler.unscale_(optimizer)
                 norm = get_grad_norm_(parameters)
@@ -326,71 +337,24 @@ def get_grad_norm_(parameters, norm_type: float = 2.0) -> torch.Tensor:
     norm_type = float(norm_type)
     if len(parameters) == 0:
         return torch.tensor(0.0)
+    assert parameters[0].grad is not None
     device = parameters[0].grad.device
     if norm_type == math.inf:
-        total_norm = max(p.grad.detach().abs().max().to(device) for p in parameters)
+        total_norm = max(p.grad.detach().abs().max().to(device) for p in parameters if p.grad is not None)
     else:
         total_norm = torch.norm(
             torch.stack(
-                [torch.norm(p.grad.detach(), norm_type).to(device) for p in parameters]
+                [torch.norm(p.grad.detach(), norm_type).to(device) for p in parameters if p.grad is not None]
             ),
             norm_type,
         )
     return total_norm
 
 
-def save_model(config, epoch, model, model_without_ddp, optimizer, loss_scaler):
-    output_dir = Path(config["output_dir"])
-    epoch_name = str(epoch)
-    if loss_scaler is not None:
-        checkpoint_paths = [
-            output_dir / ("checkpoint-%s-%s.pth" % (epoch_name, config["method_name"]))
-        ]
-        for checkpoint_path in checkpoint_paths:
-            to_save = {
-                "model": model_without_ddp.state_dict(),
-                #'optimizer': optimizer.state_dict(),
-                #'epoch': epoch,
-                #'scaler': loss_scaler.state_dict(),
-                #'args': args,
-            }
-
-            save_on_master(to_save, checkpoint_path)
-    else:
-        client_state = {"epoch": epoch}
-        model.save_checkpoint(
-            save_dir=config["output_dir"],
-            tag="checkpoint-%s" % epoch_name,
-            client_state=client_state,
-        )
-
-
-def load_model(args, config, model_without_ddp, optimizer, loss_scaler):
-    if config["resume"]:
-        if config["resume"].startswith("https"):
-            checkpoint = torch.hub.load_state_dict_from_url(
-                config["resume"], map_location="cpu", check_hash=True
-            )
-        else:
-            checkpoint = torch.load(config["resume"], map_location="cpu")
-        model_without_ddp.load_state_dict(checkpoint["model"])
-        print("Resume checkpoint %s" % config["resume"])
-        if (
-            "optimizer" in checkpoint
-            and "epoch" in checkpoint
-            and not (hasattr(args, "eval") and args.eval)
-        ):
-            optimizer.load_state_dict(checkpoint["optimizer"])
-            args.start_epoch = checkpoint["epoch"] + 1
-            if "scaler" in checkpoint:
-                loss_scaler.load_state_dict(checkpoint["scaler"])
-            print("With optim & sched!")
-
-
 def all_reduce_mean(x):
     world_size = get_world_size()
     if world_size > 1:
-        x_reduce = torch.tensor(x).cuda()
+        x_reduce = x.clone().detach().cuda()
         dist.all_reduce(x_reduce)
         x_reduce /= world_size
         return x_reduce.item()
