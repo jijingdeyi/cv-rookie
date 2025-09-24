@@ -72,10 +72,9 @@ class Sobel2D(nn.Module):
         return gx, gy
 
 
-class FusionlossAligned(nn.Module):
+class GradlossAligned(nn.Module):
     """
-    多尺度梯度项（第6点）+ Sobel 反射填充（第4点）
-    其他保持你的写法：强度项用 max(Y, IR)，梯度项逐方向硬选择且保留符号
+    梯度项逐方向硬选择且保留符号
     """
     def __init__(self, grad_weight: float = 10.0,
                  scales=(1.0, 0.5, 0.25), scale_weights=None,
@@ -101,8 +100,8 @@ class FusionlossAligned(nn.Module):
     def forward(self, image_vis: torch.Tensor, image_ir: torch.Tensor, generate_img: torch.Tensor):
         # === 强度项：保持你的写法 ===
         image_y = image_vis[:, :1, :, :]  # 若 image_vis 为 RGB，这里仍然取第一个通道（与你原版一致）
-        x_in_max = torch.max(image_y, image_ir)
-        loss_in = F.l1_loss(x_in_max, generate_img)
+        # x_in_max = torch.max(image_y, image_ir)
+        # loss_in = F.l1_loss(x_in_max, generate_img)
 
         # === 多尺度梯度项 ===
         loss_grad_ms = 0.0
@@ -122,8 +121,8 @@ class FusionlossAligned(nn.Module):
             loss_grad_s = F.l1_loss(gx_f, sel_gx) + F.l1_loss(gy_f, sel_gy)
             loss_grad_ms = loss_grad_ms + w * loss_grad_s
 
-        loss_total = loss_in + self.grad_weight * loss_grad_ms
-        return loss_total, loss_in, loss_grad_ms
+        # loss_total = loss_in + self.grad_weight * loss_grad_ms
+        return self.grad_weight * loss_grad_ms  # 仅返回梯度项
 
 
 def cc(img1: torch.Tensor, img2: torch.Tensor) -> torch.Tensor:

@@ -1,9 +1,9 @@
 import numpy as np
 from scipy.signal import convolve2d
-from Qabf import get_Qabf
-from Nabf import get_Nabf
+from Metric.Qabf import get_Qabf
+from Metric.Nabf import get_Nabf
 import math
-from ssim import ssim, ms_ssim
+from Metric.ssim import ssim, ms_ssim
 
 def EN_function(image_array):
     # 计算图像的直方图

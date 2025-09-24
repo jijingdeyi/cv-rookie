@@ -6,6 +6,7 @@ import torch.nn.functional as F
 import torchvision.transforms.functional as TF
 import numpy as np
 
+
 def _fspecial_gauss_1d(size, sigma):
     r"""Create 1-D gauss kernel
     Args:
@@ -17,14 +18,14 @@ def _fspecial_gauss_1d(size, sigma):
     coords = torch.arange(size, dtype=torch.float32)
     coords -= size // 2
 
-    g = torch.exp(-(coords ** 2) / (2 * sigma ** 2))
+    g = torch.exp(-(coords**2) / (2 * sigma**2))
     g /= g.sum()
 
     return g.unsqueeze(0).unsqueeze(0)
 
 
 def gaussian_filter(input, win):
-    r""" Blur input with 1-D kernel
+    r"""Blur input with 1-D kernel
     Args:
         input (torch.Tensor): a batch of tensors to be blurred
         window (torch.Tensor): 1-D gauss kernel
@@ -55,14 +56,14 @@ def gaussian_filter(input, win):
     return out
 
 
-def _ssim(X, Y, data_range, win, K=(0.01, 0.03)):
+def _ssim(X, Y, data_range, win, K=(0.01, 0.03), eps=1e-12):
     K1, K2 = K
-    # batch, channel, [depth,] height, width = X.shape
-    compensation = 1.0
-
     C1 = (K1 * data_range) ** 2
     C2 = (K2 * data_range) ** 2
 
+    # 用 float64 提高稳定性
+    X = X.to(torch.float64)
+    Y = Y.to(torch.float64)
     win = win.type_as(X)
 
     mu1 = gaussian_filter(X, win)
@@ -72,26 +73,37 @@ def _ssim(X, Y, data_range, win, K=(0.01, 0.03)):
     mu2_sq = mu2.pow(2)
     mu1_mu2 = mu1 * mu2
 
-    sigma1_sq = compensation * (gaussian_filter(X * X, win) - mu1_sq)
-    sigma2_sq = compensation * (gaussian_filter(Y * Y, win) - mu2_sq)
-    sigma12 = compensation * (gaussian_filter(X * Y, win) - mu1_mu2)
+    sigma1_sq = gaussian_filter(X * X, win) - mu1_sq
+    sigma2_sq = gaussian_filter(Y * Y, win) - mu2_sq
+    sigma12 = gaussian_filter(X * Y, win) - mu1_mu2
 
-    cs_map = (2 * sigma12 + C2) / (sigma1_sq + sigma2_sq + C2)  # set alpha=beta=gamma=1
-    ssim_map = ((2 * mu1_mu2 + C1) / (mu1_sq + mu2_sq + C1)) * cs_map
+    # 数值稳定：方差下界到 >=0，分母加 eps
+    sigma1_sq = torch.clamp(sigma1_sq, min=0)
+    sigma2_sq = torch.clamp(sigma2_sq, min=0)
+
+    cs_map = (2 * sigma12 + C2) / (sigma1_sq + sigma2_sq + C2 + eps)
+    ssim_map = ((2 * mu1_mu2 + C1) / (mu1_sq + mu2_sq + C1 + eps)) * cs_map
+
+    # 理论上界 1：做上界裁剪（避免 1.0000001 之类）
+    cs_map = torch.clamp(cs_map, 0.0, 1.0)
+    ssim_map = torch.clamp(ssim_map, 0.0, 1.0)
 
     ssim_per_channel = torch.flatten(ssim_map, 2).mean(-1)
     cs = torch.flatten(cs_map, 2).mean(-1)
-    return ssim_per_channel, cs
+    return ssim_per_channel.to(torch.float32), cs.to(torch.float32)
 
-def ssim(X,
-         Y,
-         data_range=255,
-         size_average=True,
-         win_size=11,
-         win_sigma=1.5,
-         win=None,
-         K=(0.01, 0.03),
-         nonnegative_ssim=False):
+
+def ssim(
+    X,
+    Y,
+    data_range=255,
+    size_average=True,
+    win_size=11,
+    win_sigma=1.5,
+    win=None,
+    K=(0.01, 0.03),
+    nonnegative_ssim=False,
+):
     # 输出的是灰度图像，其shape是[H, W]
     # 需要扩展为 [B, C, H, W]
     X = TF.to_tensor(X).unsqueeze(0).unsqueeze(0) * 255.0
@@ -104,7 +116,9 @@ def ssim(X,
         Y = torch.squeeze(Y, dim=d)
 
     if len(X.shape) not in (4, 5):
-        raise ValueError(f"Input images should be 4-d or 5-d tensors, but got {X.shape}")
+        raise ValueError(
+            f"Input images should be 4-d or 5-d tensors, but got {X.shape}"
+        )
 
     if not X.dtype == Y.dtype:
         raise ValueError("Input images should have the same dtype.")
@@ -121,7 +135,7 @@ def ssim(X,
 
     ssim_per_channel, _ = _ssim(X, Y, data_range=data_range, win=win, K=K)
     if nonnegative_ssim:
-        ssim_per_channel = F.relu(ssim_per_channel)
+        ssim_per_channel = torch.clamp(ssim_per_channel, 0.0, 1.0)
 
     if size_average:
         return ssim_per_channel.mean()
@@ -130,16 +144,16 @@ def ssim(X,
 
 
 def ms_ssim(
-        X,
-        Y,
-        data_range=255,
-        size_average=True,
-        win_size=11,
-        win_sigma=1.5,
-        win=None,
-        weights=None,
-        K=(0.01, 0.03)
-    ):
+    X,
+    Y,
+    data_range=255,
+    size_average=True,
+    win_size=11,
+    win_sigma=1.5,
+    win=None,
+    weights=None,
+    K=(0.01, 0.03),
+):
     # 输出的是灰度图像，其shape是[H, W]
     # 需要扩展为 [B, C, H, W]
     X = TF.to_tensor(X).unsqueeze(0).unsqueeze(0) * 255.0
@@ -159,7 +173,9 @@ def ms_ssim(
     elif len(X.shape) == 5:
         avg_pool = F.avg_pool3d
     else:
-        raise ValueError(f"Input images should be 4-d or 5-d tensors, but got {X.shape}")
+        raise ValueError(
+            f"Input images should be 4-d or 5-d tensors, but got {X.shape}"
+        )
 
     if win is not None:  # set win_size
         win_size = win.shape[-1]
@@ -169,8 +185,10 @@ def ms_ssim(
 
     smaller_side = min(X.shape[-2:])
     assert smaller_side > (win_size - 1) * (
-        2 ** 4
-    ), "Image size should be larger than %d due to the 4 downsamplings in ms-ssim" % ((win_size - 1) * (2 ** 4))
+        2**4
+    ), "Image size should be larger than %d due to the 4 downsamplings in ms-ssim" % (
+        (win_size - 1) * (2**4)
+    )
 
     if weights is None:
         weights = [0.0448, 0.2856, 0.3001, 0.2363, 0.1333]
@@ -192,13 +210,16 @@ def ms_ssim(
             Y = avg_pool(Y, kernel_size=2, padding=padding)
 
     ssim_per_channel = F.relu(ssim_per_channel)  # (batch, channel)
-    mcs_and_ssim = torch.stack(mcs + [ssim_per_channel], dim=0) # (level, batch, channel)
+    mcs_and_ssim = torch.stack(
+        mcs + [ssim_per_channel], dim=0
+    )  # (level, batch, channel)
     ms_ssim_val = torch.prod(mcs_and_ssim ** weights.reshape((-1, 1, 1)), dim=0)
 
     if size_average:
         return ms_ssim_val.mean()
     else:
         return ms_ssim_val.mean(dim=1)
+
 
 class SSIM(nn.Module):
     def __init__(
@@ -214,7 +235,9 @@ class SSIM(nn.Module):
     ):
         super(SSIM, self).__init__()
         self.win_size = win_size
-        self.win = _fspecial_gauss_1d(win_size, win_sigma).tile([channel, 1] + [1] * spatial_dims)
+        self.win = _fspecial_gauss_1d(win_size, win_sigma).tile(
+            [channel, 1] + [1] * spatial_dims
+        )
         self.size_average = size_average
         self.data_range = data_range
         self.K = K
@@ -246,7 +269,9 @@ class MS_SSIM(nn.Module):
     ):
         super(MS_SSIM, self).__init__()
         self.win_size = win_size
-        self.win = _fspecial_gauss_1d(win_size, win_sigma).tile([channel, 1] + [1] * spatial_dims)
+        self.win = _fspecial_gauss_1d(win_size, win_sigma).tile(
+            [channel, 1] + [1] * spatial_dims
+        )
         self.size_average = size_average
         self.data_range = data_range
         self.weights = weights

@@ -1,41 +1,61 @@
 import numpy as np
 from PIL import Image
-from metric import *
+from Metric.metric import *
 from natsort import natsorted
 from tqdm import tqdm
 import os
-import statistics
 import warnings
 from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
+
 warnings.filterwarnings("ignore")
 
-def write_excel(excel_name='metric.xlsx', worksheet_name='VIF', column_index=0, data=None):
+
+def write_excel(
+    excel_name="metric.xlsx", worksheet_name="VIF", column_index=0, data=None
+):
+    """将 data 按列写入到指定工作表（0-based 列索引）。会自动移除默认空白 Sheet。"""
+    if data is None:
+        data = []
+
     try:
         workbook = load_workbook(excel_name)
+        # 如果已有文件里还有默认空白表，且存在其他表，顺手删掉
+        if "Sheet" in workbook.sheetnames and len(workbook.sheetnames) > 1:
+            workbook.remove(workbook["Sheet"])
     except FileNotFoundError:
-    # 文件不存在，创建新的 Workbook
         workbook = Workbook()
+        # 新建文件默认会有一个名为 'Sheet' 的空表，直接删掉
+        if workbook.active and workbook.active.title == "Sheet":
+            workbook.remove(workbook.active)
 
-    # 获取或创建一个工作表
-    if worksheet_name in workbook.sheetnames:
-        worksheet = workbook[worksheet_name]
-    else:
-        worksheet = workbook.create_sheet(title=worksheet_name)
+    # 获取或创建目标工作表
+    worksheet = (
+        workbook[worksheet_name]
+        if worksheet_name in workbook.sheetnames
+        else workbook.create_sheet(title=worksheet_name)
+    )
 
-    # 在指定列中插入数据
-    column = get_column_letter(column_index + 1)
-    for i, value in enumerate(data):
-        cell = worksheet[column + str(i+1)]
-        cell.value = value
+    # 在指定列中插入数据（column_index 从 0 开始）
+    col_letter = get_column_letter(column_index + 1)
+    for i, value in enumerate(data, start=1):
+        worksheet[f"{col_letter}{i}"].value = value
 
-    # 保存文件
+    # 为保守起见，如果写完后仍只有一个默认 'Sheet'，也移除
+    if (
+        "Sheet" in workbook.sheetnames
+        and worksheet_name != "Sheet"
+        and len(workbook.sheetnames) > 1
+    ):
+        workbook.remove(workbook["Sheet"])
+
     workbook.save(excel_name)
 
+
 def evaluation_one(ir_name, vi_name, f_name):
-    f_img = Image.open(f_name).convert('L')
-    ir_img = Image.open(ir_name).convert('L')
-    vi_img = Image.open(vi_name).convert('L')
+    f_img = Image.open(f_name).convert("L")
+    ir_img = Image.open(ir_name).convert("L")
+    vi_img = Image.open(vi_name).convert("L")
 
     f_img_int = np.array(f_img).astype(np.int32)
     f_img_double = np.array(f_img).astype(np.float32)
@@ -63,52 +83,41 @@ def evaluation_one(ir_name, vi_name, f_name):
     MS_SSIM = MS_SSIM_function(ir_img_double, vi_img_double, f_img_double)
     return EN, MI, SF, AG, SD, CC, SCD, VIF, MSE, PSNR, Qabf, Nabf, SSIM, MS_SSIM
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     with_mean = True
-    #dataroot = 'F:/dataset/'
-    results_root = r'C:\Users\26228\Desktop\paper3\loss_ablation\msrs'
-    #dataset = 'LLVIP'
-    ir_dir = r'F:\dataset\test\MSRS\ir'
-    vi_dir = r'F:\dataset\test\MSRS\vi'
+    results_root = os.path.join("/home/ykx/ReCoNet", "result")
+    ir_dir = os.path.join("/data/ykx/MSRS_test", "ir")
+    vi_dir = os.path.join("/data/ykx/MSRS_test", "vi")
     f_dir = os.path.join(results_root)
-    save_dir = r'C:\Users\26228\Desktop\paper3\metric'
+    save_dir = os.path.join(results_root, "metric")
     os.makedirs(save_dir, exist_ok=True)
 
-    #metric_save_name = os.path.join(save_dir, 'metric_{}.xlsx'.format(dataset))
-    metric_save_name = os.path.join(save_dir, 'msrs_ablation.xlsx')
-
+    metric_save_name = os.path.join(save_dir, "msrs_ablation.xlsx")
     filelist = natsorted(os.listdir(ir_dir))
 
-    # Method_list = ['cddfuse', 'densefuse', 'didfuse', 'emma', 'ganmcc', 'lrrnet', 'metafusion',\
-    #                'mfeif', 'piafusion', 'PMGI', 'reconet', 'rfn-nest', 'sdnet', 'segmif', 'tardal', 'textif', 'u2fusion']
-
-    Method_list = ['msrs_031', 'msrs_601', 'msrs_630', 'msrs_631']
-
+    Method_list = ["ori", "with_grad_loss", "ori_mygrad"]
 
     for i, Method in enumerate(Method_list):
-        EN_list = []
-        MI_list = []
-        SF_list = []
-        AG_list = []
-        SD_list = []
-        CC_list = []
-        SCD_list = []
-        VIF_list = []
-        MSE_list = []
-        PSNR_list = []
-        Qabf_list = []
-        Nabf_list = []
-        SSIM_list = []
-        MS_SSIM_list = []
-        filename_list = ['']
+        EN_list, MI_list, SF_list, AG_list, SD_list = [], [], [], [], []
+        CC_list, SCD_list, VIF_list = [], [], []
+        MSE_list, PSNR_list = [], []
+        Qabf_list, Nabf_list = [], []
+        SSIM_list, MS_SSIM_list = [], []
+        filename_list = [""]  # 第一行预留空位与“方法名”列对齐
+
         sub_f_dir = os.path.join(f_dir, Method)
-        eval_bar = tqdm(filelist)
+        eval_bar = tqdm(filelist, desc=f"{Method}")
+
         for _, item in enumerate(eval_bar):
             ir_name = os.path.join(ir_dir, item)
             vi_name = os.path.join(vi_dir, item)
             f_name = os.path.join(sub_f_dir, item)
-            print(ir_name, vi_name, f_name)
-            EN, MI, SF, AG, SD, CC, SCD, VIF, MSE, PSNR, Qabf, Nabf, SSIM, MS_SSIM = evaluation_one(ir_name, vi_name, f_name)
+            # 如需调试可打开：
+            # print(ir_name, vi_name, f_name)
+            EN, MI, SF, AG, SD, CC, SCD, VIF, MSE, PSNR, Qabf, Nabf, SSIM, MS_SSIM = (
+                evaluation_one(ir_name, vi_name, f_name)
+            )
             EN_list.append(EN)
             MI_list.append(MI)
             SF_list.append(SF)
@@ -124,74 +133,93 @@ if __name__ == '__main__':
             SSIM_list.append(SSIM)
             MS_SSIM_list.append(MS_SSIM)
             filename_list.append(item)
-            eval_bar.set_description("{} | {}".format(Method, item))
+
         if with_mean:
-        # 添加均值
-            EN_list.append(np.mean(EN_list))
-            MI_list.append(np.mean(MI_list))
-            SF_list.append(np.mean(SF_list))
-            AG_list.append(np.mean(AG_list))
-            SD_list.append(np.mean(SD_list))
-            CC_list.append(np.mean(CC_list))
-            SCD_list.append(np.mean(SCD_list))
-            VIF_list.append(np.mean(VIF_list))
-            MSE_list.append(np.mean(MSE_list))
-            PSNR_list.append(np.mean(PSNR_list))
-            Qabf_list.append(np.mean(Qabf_list))
-            Nabf_list.append(np.mean(Nabf_list))
-            SSIM_list.append(np.mean(SSIM_list))
-            MS_SSIM_list.append(np.mean(MS_SSIM_list))
-            filename_list.append('mean')
+            # —— 用“原始样本”计算均值与标准差，避免被后续 append 的统计量污染 ——
+            EN_raw, MI_raw, SF_raw, AG_raw, SD_raw = (
+                EN_list[:],
+                MI_list[:],
+                SF_list[:],
+                AG_list[:],
+                SD_list[:],
+            )
+            CC_raw, SCD_raw, VIF_raw = CC_list[:], SCD_list[:], VIF_list[:]
+            MSE_raw, PSNR_raw = MSE_list[:], PSNR_list[:]
+            Qabf_raw, Nabf_raw = Qabf_list[:], Nabf_list[:]
+            SSIM_raw, MS_SSIM_raw = SSIM_list[:], MS_SSIM_list[:]
 
-            ## 添加标准差
-            EN_list.append(np.std(EN_list))
-            MI_list.append(np.std(MI_list))
-            SF_list.append(np.std(SF_list))
-            AG_list.append(np.std(AG_list))
-            SD_list.append(np.std(SD_list))
-            CC_list.append(np.std(CC_list[:-1]))
-            SCD_list.append(np.std(SCD_list))
-            VIF_list.append(np.std(VIF_list))
-            MSE_list.append(np.std(MSE_list))
-            PSNR_list.append(np.std(PSNR_list))
-            Qabf_list.append(np.std(Qabf_list))
-            Nabf_list.append(np.std(Nabf_list))
-            SSIM_list.append(np.std(SSIM_list))
-            MS_SSIM_list.append(np.std(MS_SSIM_list))
-            filename_list.append('std')
+            # 均值
+            EN_list.append(np.mean(EN_raw))
+            MI_list.append(np.mean(MI_raw))
+            SF_list.append(np.mean(SF_raw))
+            AG_list.append(np.mean(AG_raw))
+            SD_list.append(np.mean(SD_raw))
+            CC_list.append(np.mean(CC_raw))
+            SCD_list.append(np.mean(SCD_raw))
+            VIF_list.append(np.mean(VIF_raw))
+            MSE_list.append(np.mean(MSE_raw))
+            PSNR_list.append(np.mean(PSNR_raw))
+            Qabf_list.append(np.mean(Qabf_raw))
+            Nabf_list.append(np.mean(Nabf_raw))
+            SSIM_list.append(np.mean(SSIM_raw))
+            MS_SSIM_list.append(np.mean(MS_SSIM_raw))
+            filename_list.append("mean")
 
-        ## 保留三位小数
-        EN_list = [round(x, 3) for x in EN_list]
-        MI_list = [round(x, 3) for x in MI_list]
-        SF_list = [round(x, 3) for x in SF_list]
-        AG_list = [round(x, 3) for x in AG_list]
-        SD_list = [round(x, 3) for x in SD_list]
-        CC_list = [round(x, 3) for x in CC_list]
-        SCD_list = [round(x, 3) for x in SCD_list]
-        VIF_list = [round(x, 3) for x in VIF_list]
-        MSE_list = [round(x, 3) for x in MSE_list]
-        PSNR_list = [round(x, 3) for x in PSNR_list]
-        Qabf_list = [round(x, 3) for x in Qabf_list]
-        Nabf_list = [round(x, 3) for x in Nabf_list]
-        SSIM_list = [round(x, 3) for x in SSIM_list]
-        MS_SSIM_list = [round(x, 3) for x in MS_SSIM_list]
+            # 标准差（统一用“原始样本”）
+            EN_list.append(np.std(EN_raw))
+            MI_list.append(np.std(MI_raw))
+            SF_list.append(np.std(SF_raw))
+            AG_list.append(np.std(AG_raw))
+            SD_list.append(np.std(SD_raw))
+            CC_list.append(np.std(CC_raw))
+            SCD_list.append(np.std(SCD_raw))
+            VIF_list.append(np.std(VIF_raw))
+            MSE_list.append(np.std(MSE_raw))
+            PSNR_list.append(np.std(PSNR_raw))
+            Qabf_list.append(np.std(Qabf_raw))
+            Nabf_list.append(np.std(Nabf_raw))
+            SSIM_list.append(np.std(SSIM_raw))
+            MS_SSIM_list.append(np.std(MS_SSIM_raw))
+            filename_list.append("std")
 
-        EN_list.insert(0, '{}'.format(Method))
-        MI_list.insert(0, '{}'.format(Method))
-        SF_list.insert(0, '{}'.format(Method))
-        AG_list.insert(0, '{}'.format(Method))
-        SD_list.insert(0, '{}'.format(Method))
-        CC_list.insert(0, '{}'.format(Method))
-        SCD_list.insert(0, '{}'.format(Method))
-        VIF_list.insert(0, '{}'.format(Method))
-        MSE_list.insert(0, '{}'.format(Method))
-        PSNR_list.insert(0, '{}'.format(Method))
-        Qabf_list.insert(0, '{}'.format(Method))
-        Nabf_list.insert(0, '{}'.format(Method))
-        SSIM_list.insert(0, '{}'.format(Method))
-        MS_SSIM_list.insert(0, '{}'.format(Method))
+        # 保留三位小数
+        def round3(lst):
+            return [round(x, 3) for x in lst]
+
+        EN_list = round3(EN_list)
+        MI_list = round3(MI_list)
+        SF_list = round3(SF_list)
+        AG_list = round3(AG_list)
+        SD_list = round3(SD_list)
+        CC_list = round3(CC_list)
+        SCD_list = round3(SCD_list)
+        VIF_list = round3(VIF_list)
+        MSE_list = round3(MSE_list)
+        PSNR_list = round3(PSNR_list)
+        Qabf_list = round3(Qabf_list)
+        Nabf_list = round3(Nabf_list)
+        SSIM_list = round3(SSIM_list)
+        MS_SSIM_list = round3(MS_SSIM_list)
+
+        # 在每列顶部插入方法名，和你的原逻辑保持一致
+        EN_list.insert(0, f"{Method}")
+        MI_list.insert(0, f"{Method}")
+        SF_list.insert(0, f"{Method}")
+        AG_list.insert(0, f"{Method}")
+        SD_list.insert(0, f"{Method}")
+        CC_list.insert(0, f"{Method}")
+        SCD_list.insert(0, f"{Method}")
+        VIF_list.insert(0, f"{Method}")
+        MSE_list.insert(0, f"{Method}")
+        PSNR_list.insert(0, f"{Method}")
+        Qabf_list.insert(0, f"{Method}")
+        Nabf_list.insert(0, f"{Method}")
+        SSIM_list.insert(0, f"{Method}")
+        MS_SSIM_list.insert(0, f"{Method}")
+
+        # 第一次循环把文件名列写进去，后面方法只写各自列
         if i == 0:
-            write_excel(metric_save_name, 'EN', 0, filename_list)
+            write_excel(metric_save_name, "EN", 0, filename_list)
             write_excel(metric_save_name, "MI", 0, filename_list)
             write_excel(metric_save_name, "SF", 0, filename_list)
             write_excel(metric_save_name, "AG", 0, filename_list)
@@ -205,17 +233,18 @@ if __name__ == '__main__':
             write_excel(metric_save_name, "Nabf", 0, filename_list)
             write_excel(metric_save_name, "SSIM", 0, filename_list)
             write_excel(metric_save_name, "MS_SSIM", 0, filename_list)
-        write_excel(metric_save_name, 'EN', i + 1, EN_list)
-        write_excel(metric_save_name, 'MI', i + 1, MI_list)
-        write_excel(metric_save_name, 'SF', i + 1, SF_list)
-        write_excel(metric_save_name, 'AG', i + 1, AG_list)
-        write_excel(metric_save_name, 'SD', i + 1, SD_list)
-        write_excel(metric_save_name, 'CC', i + 1, CC_list)
-        write_excel(metric_save_name, 'SCD', i + 1, SCD_list)
-        write_excel(metric_save_name, 'VIF', i + 1, VIF_list)
-        write_excel(metric_save_name, 'MSE', i + 1, MSE_list)
-        write_excel(metric_save_name, 'PSNR', i + 1, PSNR_list)
-        write_excel(metric_save_name, 'Qabf', i + 1, Qabf_list)
-        write_excel(metric_save_name, 'Nabf', i + 1, Nabf_list)
-        write_excel(metric_save_name, 'SSIM', i + 1, SSIM_list)
-        write_excel(metric_save_name, 'MS_SSIM', i + 1, MS_SSIM_list)
+
+        write_excel(metric_save_name, "EN", i + 1, EN_list)
+        write_excel(metric_save_name, "MI", i + 1, MI_list)
+        write_excel(metric_save_name, "SF", i + 1, SF_list)
+        write_excel(metric_save_name, "AG", i + 1, AG_list)
+        write_excel(metric_save_name, "SD", i + 1, SD_list)
+        write_excel(metric_save_name, "CC", i + 1, CC_list)
+        write_excel(metric_save_name, "SCD", i + 1, SCD_list)
+        write_excel(metric_save_name, "VIF", i + 1, VIF_list)
+        write_excel(metric_save_name, "MSE", i + 1, MSE_list)
+        write_excel(metric_save_name, "PSNR", i + 1, PSNR_list)
+        write_excel(metric_save_name, "Qabf", i + 1, Qabf_list)
+        write_excel(metric_save_name, "Nabf", i + 1, Nabf_list)
+        write_excel(metric_save_name, "SSIM", i + 1, SSIM_list)
+        write_excel(metric_save_name, "MS_SSIM", i + 1, MS_SSIM_list)
