@@ -7,49 +7,183 @@ import os
 import warnings
 from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
+from typing import Optional
 
 warnings.filterwarnings("ignore")
 
 
-def write_excel(
-    excel_name="metric.xlsx", worksheet_name="VIF", column_index=0, data=None
-):
-    """将 data 写入指定工作表的指定列（0-based）；自动移除默认空白 Sheet。"""
-    if data is None:
-        data = []
-
+def _load_or_create_wb(excel_name: str):
     try:
-        workbook = load_workbook(excel_name)
-        # 如果已有文件里仍保留默认空白表且还有其他表，顺手删掉
-        if "Sheet" in workbook.sheetnames and len(workbook.sheetnames) > 1:
-            workbook.remove(workbook["Sheet"])
+        wb = load_workbook(excel_name)
+        # 清理多余的默认Sheet
+        if "Sheet" in wb.sheetnames and len(wb.sheetnames) > 1:
+            wb.remove(wb["Sheet"])
     except FileNotFoundError:
-        # 新建文件默认有个 'Sheet'，先删掉
-        workbook = Workbook()
-        if workbook.active and workbook.active.title == "Sheet":
-            workbook.remove(workbook.active)
+        wb = Workbook()
+        # 新建文件时删除默认Sheet
+        if wb.active and wb.active.title == "Sheet":
+            wb.remove(wb.active)
+    return wb
 
-    # 获取或创建目标工作表
-    worksheet = (
-        workbook[worksheet_name]
-        if worksheet_name in workbook.sheetnames
-        else workbook.create_sheet(title=worksheet_name)
-    )
 
-    # 在指定列写数据
-    col_letter = get_column_letter(column_index + 1)
-    for i, value in enumerate(data, start=1):
-        worksheet[f"{col_letter}{i}"].value = value
+def _get_or_create_ws(wb, worksheet_name: str):
+    if worksheet_name in wb.sheetnames:
+        ws = wb[worksheet_name]
+    else:
+        ws = wb.create_sheet(title=worksheet_name)
+    return ws
 
-    # 再保险：若还有默认 'Sheet' 且存在其他表，移除之
+
+def _first_col_has_values(ws) -> bool:
+    # 只要第一列有任意一个非空单元格就视为“已有文件名列”
+    for cell in ws.iter_cols(min_col=1, max_col=1, min_row=1, values_only=True):
+        if any(v is not None for v in cell):
+            return True
+    return False
+
+
+def _next_empty_col_index_0based(ws) -> int:
+    """
+    找到下一列空白列（0-based）。我们按照 openpyxl 的 max_column 追加即可。
+    注意：如果用户中途手动清空了中间某些列，这里仍会在最后一列之后继续追加（更安全）。
+    """
+    return ws.max_column  # 0-based（因为我们写入时会 +1 变成 1-based 列号）
+
+
+def _find_col_by_header(ws, header: str, header_row: int = 1) -> Optional[int]:
+    target = header.strip().lower()
+    hits = []
+    for col_idx_1b in range(1, ws.max_column + 1):
+        val = ws.cell(row=header_row, column=col_idx_1b).value
+        if isinstance(val, str) and val.strip().lower() == target:
+            hits.append(col_idx_1b - 1)
+    if len(hits) > 1:
+        print(f"[Warn] 工作表 '{ws.title}' 中存在多个同名方法列 '{header}'，将覆盖第一个匹配列（第 {hits[0]+1} 列）。")
+    return hits[0] if hits else None
+
+
+def write_excel_append(
+    excel_name: str,
+    worksheet_name: str,
+    data: list,
+    column_index: int | None = None,
+    ensure_filename_first_col: bool = False,
+    sanity_name_list: list | None = None,  # 可选：用于做文件名一致性检查
+):
+    """
+    - 若 column_index is None：自动在下一空白列追加（推荐给“方法指标列”用）。
+    - 若 ensure_filename_first_col=True：仅当第一列为空时，写入 data 到第一列作为“文件名列”。
+      （若第一列已有内容，则跳过，不覆盖）
+    - 若 column_index 是显式整数（0-based）：按该列写入。
+    """
+    wb = _load_or_create_wb(excel_name)
+    ws = _get_or_create_ws(wb, worksheet_name)
+
+    # 需要写入文件名列？
+    if ensure_filename_first_col:
+        if not _first_col_has_values(ws):
+            # 第一列为空 -> 写入文件名
+            col_letter = get_column_letter(1)  # 第一列
+            for i, v in enumerate(data, start=1):
+                ws[f"{col_letter}{i}"].value = v
+        else:
+            # 已有文件名列，若传入 sanity_name_list，可做个简单一致性提示（不抛错）
+            if sanity_name_list is not None:
+                try:
+                    # 取出现有第一列的内容用于比对长度
+                    existing_vals = [
+                        v[0]
+                        for v in ws.iter_rows(
+                            min_row=1,
+                            max_row=ws.max_row,
+                            min_col=1,
+                            max_col=1,
+                            values_only=True,
+                        )
+                    ]
+
+                    if len(existing_vals) != len(sanity_name_list):
+                        print(
+                            f"[Warn] 工作表 {worksheet_name} 的文件名列行数({len(existing_vals)})"
+                            f"与本次评估数量({len(sanity_name_list)})不一致，请确认是否同一批数据。"
+                        )
+                except Exception:
+                    pass
+        # 如果只是确保第一列，直接保存并返回（不去写“方法列”）
+        wb.save(excel_name)
+        return
+
+    # 计算要写入的目标列
+    if column_index is None:
+        col0 = _next_empty_col_index_0based(ws)
+    else:
+        col0 = int(column_index)
+
+    col_letter = get_column_letter(col0 + 1)  # 转 1-based
+    for i, v in enumerate(data, start=1):
+        ws[f"{col_letter}{i}"].value = v
+
+    # 写完再保险清理
     if (
-        "Sheet" in workbook.sheetnames
+        "Sheet" in wb.sheetnames
         and worksheet_name != "Sheet"
-        and len(workbook.sheetnames) > 1
+        and len(wb.sheetnames) > 1
     ):
-        workbook.remove(workbook["Sheet"])
+        wb.remove(wb["Sheet"])
+    wb.save(excel_name)
 
-    workbook.save(excel_name)
+
+def write_excel_upsert_by_header(
+    excel_name: str,
+    worksheet_name: str,
+    data: list,              # 第一项应为方法名（即你的 Method），后续为各图像指标 + mean + std
+    header_row: int = 1,
+    clear_trailing: bool = True,  # 若旧列比新列更长，是否清空多余单元格
+):
+    """
+    按第 header_row 行的“表头（方法名）”进行 upsert：
+    - 若已存在同名表头：原地覆盖该列数据；
+    - 否则：在下一空白列追加。
+    """
+    wb = _load_or_create_wb(excel_name)
+    ws = _get_or_create_ws(wb, worksheet_name)
+
+    if not data:
+        wb.save(excel_name)
+        return
+
+    header = data[0]  # 你的代码里已在每个指标列顶部插入了 Method
+    if not isinstance(header, str) or not header.strip():
+        raise ValueError("data 的第一个元素必须是方法名（非空字符串）。")
+
+    # 查找是否已存在同名方法列
+    col0 = _find_col_by_header(ws, header, header_row=header_row)
+    if col0 is None:
+        # 不存在则在下一空列追加
+        col0 = _next_empty_col_index_0based(ws)
+
+    # 写入该列（覆盖或追加）
+    col_letter = get_column_letter(col0 + 1)  # 转 1-based
+    for i, v in enumerate(data, start=1):
+        ws[f"{col_letter}{i}"].value = v
+
+    # 如果之前该列行数更长，且需要清理尾部残留，则把多余单元格清空
+    if clear_trailing:
+        old_max = ws.max_row
+        new_len = len(data)
+        if old_max > new_len:
+            for r in range(new_len + 1, old_max + 1):
+                ws.cell(row=r, column=col0 + 1, value=None)
+
+    # 清理默认 Sheet
+    if (
+        "Sheet" in wb.sheetnames
+        and worksheet_name != "Sheet"
+        and len(wb.sheetnames) > 1
+    ):
+        wb.remove(wb["Sheet"])
+
+    wb.save(excel_name)
 
 
 def evaluation_one(ir_name, vi_name, f_name):
@@ -89,13 +223,13 @@ if __name__ == "__main__":
 
     # --- 路径与配置 ---
     dataset_name = "msrs"
-    Method = "ferfusion"  # 仅用于写入列首和文件名
-    ir_dir = os.path.join("/data/ykx/MSRS_test", "ir")
-    vi_dir = os.path.join("/data/ykx/MSRS_test", "vi")
-    f_dir = os.path.join("/home/ykx/ReCoNet/result", "ori")  # 融合结果所在目录
-    save_dir = os.path.join("/home/ykx/ReCoNet/result/metric", "ori")
+    Method = "ours"  # 仅用于写入列首和文件名
+    ir_dir = os.path.join("/data/ykx/LLVIP/test", "ir")
+    vi_dir = os.path.join("/data/ykx/LLVIP/test", "vi")
+    f_dir = os.path.join("/data/ykx/result/llvip", "ours")  # 融合结果所在目录
+    save_dir = os.path.join("/home/ykx/ReCoNet/result", "metric")
     os.makedirs(save_dir, exist_ok=True)
-    metric_save_name = os.path.join(save_dir, f"metric_{dataset_name}_{Method}.xlsx")
+    metric_save_name = os.path.join(save_dir, f"llvip_full_ablation.xlsx")
 
     # --- 计算指标 ---
     EN_list, MI_list, SF_list, AG_list, SD_list = [], [], [], [], []
@@ -219,32 +353,53 @@ if __name__ == "__main__":
         L.insert(0, Method)
 
     # 逐表写入
-    write_excel(metric_save_name, "EN", 0, filename_list)
-    write_excel(metric_save_name, "MI", 0, filename_list)
-    write_excel(metric_save_name, "SF", 0, filename_list)
-    write_excel(metric_save_name, "AG", 0, filename_list)
-    write_excel(metric_save_name, "SD", 0, filename_list)
-    write_excel(metric_save_name, "CC", 0, filename_list)
-    write_excel(metric_save_name, "SCD", 0, filename_list)
-    write_excel(metric_save_name, "VIF", 0, filename_list)
-    write_excel(metric_save_name, "MSE", 0, filename_list)
-    write_excel(metric_save_name, "PSNR", 0, filename_list)
-    write_excel(metric_save_name, "Qabf", 0, filename_list)
-    write_excel(metric_save_name, "Nabf", 0, filename_list)
-    write_excel(metric_save_name, "SSIM", 0, filename_list)
-    write_excel(metric_save_name, "MS_SSIM", 0, filename_list)
+    # —— 先确保每个表的第一列是文件名（若已有则自动跳过，不覆盖）——
+    for sheet in [
+        "EN",
+        "MI",
+        "SF",
+        "AG",
+        "SD",
+        "CC",
+        "SCD",
+        "VIF",
+        "MSE",
+        "PSNR",
+        "Qabf",
+        "Nabf",
+        "SSIM",
+        "MS_SSIM",
+    ]:
+        write_excel_append(
+            metric_save_name,
+            sheet,
+            data=filename_list,
+            ensure_filename_first_col=True,
+            sanity_name_list=filename_list,  # 可选：用于简单一致性检查
+        )
 
-    write_excel(metric_save_name, "EN", 1, EN_list)
-    write_excel(metric_save_name, "MI", 1, MI_list)
-    write_excel(metric_save_name, "SF", 1, SF_list)
-    write_excel(metric_save_name, "AG", 1, AG_list)
-    write_excel(metric_save_name, "SD", 1, SD_list)
-    write_excel(metric_save_name, "CC", 1, CC_list)
-    write_excel(metric_save_name, "SCD", 1, SCD_list)
-    write_excel(metric_save_name, "VIF", 1, VIF_list)
-    write_excel(metric_save_name, "MSE", 1, MSE_list)
-    write_excel(metric_save_name, "PSNR", 1, PSNR_list)
-    write_excel(metric_save_name, "Qabf", 1, Qabf_list)
-    write_excel(metric_save_name, "Nabf", 1, Nabf_list)
-    write_excel(metric_save_name, "SSIM", 1, SSIM_list)
-    write_excel(metric_save_name, "MS_SSIM", 1, MS_SSIM_list)
+    # —— 再把本次“方法指标列”自动追加到下一空白列（column_index=None => 追加）——
+    sheet_to_list = {
+        "EN": EN_list,
+        "MI": MI_list,
+        "SF": SF_list,
+        "AG": AG_list,
+        "SD": SD_list,
+        "CC": CC_list,
+        "SCD": SCD_list,
+        "VIF": VIF_list,
+        "MSE": MSE_list,
+        "PSNR": PSNR_list,
+        "Qabf": Qabf_list,
+        "Nabf": Nabf_list,
+        "SSIM": SSIM_list,
+        "MS_SSIM": MS_SSIM_list,
+    }
+    for sheet, data_list in sheet_to_list.items():
+        write_excel_upsert_by_header(
+        metric_save_name,
+        sheet,
+        data=data_list,      # 首元素是 Method，后面是指标 + mean + std
+        header_row=1,        # 你的表头就在第1行
+        clear_trailing=True  # 如果旧列更长（历史残留），顺手清空尾部
+    )

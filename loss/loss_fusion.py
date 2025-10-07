@@ -3,26 +3,22 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class Fusionloss(nn.Module):
+class GradLoss(nn.Module):
     """
     Fusion loss = int_loss + 10*grad_loss
     """
     def __init__(self):
-        super(Fusionloss, self).__init__()
+        super().__init__()
         self.sobelconv = Sobelxy()
 
     def forward(self, image_vis, image_ir, generate_img):
         image_y = image_vis[:, :1, :, :]
-        x_in_max = torch.max(image_y, image_ir)
-        loss_in = F.l1_loss(x_in_max, generate_img)
         y_grad = self.sobelconv(image_y)
         ir_grad = self.sobelconv(image_ir)
         generate_img_grad = self.sobelconv(generate_img)
         x_grad_joint = torch.max(y_grad, ir_grad)
         loss_grad = F.l1_loss(x_grad_joint, generate_img_grad)
-        # loss_grad=0.
-        loss_total = loss_in + 10 * loss_grad
-        return loss_total, loss_in, loss_grad
+        return loss_grad
 
 
 class Sobelxy(nn.Module):
@@ -33,8 +29,8 @@ class Sobelxy(nn.Module):
         kernely = [[1, 2, 1], [0, 0, 0], [-1, -2, -1]]
         kernelx = torch.FloatTensor(kernelx).unsqueeze(0).unsqueeze(0)
         kernely = torch.FloatTensor(kernely).unsqueeze(0).unsqueeze(0)
-        self.weightx = nn.Parameter(data=kernelx, requires_grad=False).cuda()
-        self.weighty = nn.Parameter(data=kernely, requires_grad=False).cuda()
+        self.weightx = nn.Parameter(data=kernelx, requires_grad=False)
+        self.weighty = nn.Parameter(data=kernely, requires_grad=False)
 
     def forward(self, x):
         sobelx = F.conv2d(x, self.weightx, padding=1)
@@ -53,13 +49,13 @@ class Sobel2D(nn.Module):
         ky = torch.tensor([[-1, -2, -1],
                            [ 0,  0,  0],
                            [ 1,  2,  1]], dtype=torch.float32)[None, None]  # [1,1,3,3]
-        self.register_buffer("kx", kx)
-        self.register_buffer("ky", ky)
+        self.register_buffer("kx", kx, persistent=False)
+        self.register_buffer("ky", ky, persistent=False)
 
     def forward(self, x: torch.Tensor):
         C = x.shape[1]
-        kx = self.kx.repeat(C, 1, 1, 1)  # [C,1,3,3]
-        ky = self.ky.repeat(C, 1, 1, 1)  # [C,1,3,3]
+        kx = self.kx.expand(C, -1, -1, -1)  # [C,1,3,3]
+        ky = self.ky.expand(C, -1, -1, -1)  # [C,1,3,3]
 
         if self.reflect_pad:
             x = F.pad(x, (1, 1, 1, 1), mode="reflect")
@@ -76,11 +72,10 @@ class GradlossAligned(nn.Module):
     """
     梯度项逐方向硬选择且保留符号
     """
-    def __init__(self, grad_weight: float = 10.0,
+    def __init__(self, 
                  scales=(1.0, 0.5, 0.25), scale_weights=None,
                  reflect_pad: bool = True):
         super().__init__()
-        self.grad_weight = grad_weight
         self.scales = scales
         # 默认高分辨率更重要：1.0:1, 0.5:0.5, 0.25:0.25
         if scale_weights is None:
@@ -99,9 +94,7 @@ class GradlossAligned(nn.Module):
 
     def forward(self, image_vis: torch.Tensor, image_ir: torch.Tensor, generate_img: torch.Tensor):
         # === 强度项：保持你的写法 ===
-        image_y = image_vis[:, :1, :, :]  # 若 image_vis 为 RGB，这里仍然取第一个通道（与你原版一致）
-        # x_in_max = torch.max(image_y, image_ir)
-        # loss_in = F.l1_loss(x_in_max, generate_img)
+        image_y = image_vis[:, :1, :, :]  # 若 image_vis 为 RGB，这里仍然取第一个通道
 
         # === 多尺度梯度项 ===
         loss_grad_ms = 0.0
@@ -121,8 +114,7 @@ class GradlossAligned(nn.Module):
             loss_grad_s = F.l1_loss(gx_f, sel_gx) + F.l1_loss(gy_f, sel_gy)
             loss_grad_ms = loss_grad_ms + w * loss_grad_s
 
-        # loss_total = loss_in + self.grad_weight * loss_grad_ms
-        return self.grad_weight * loss_grad_ms  # 仅返回梯度项
+        return loss_grad_ms  # 仅返回梯度项
 
 
 def cc(img1: torch.Tensor, img2: torch.Tensor) -> torch.Tensor:
