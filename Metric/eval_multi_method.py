@@ -86,14 +86,14 @@ def evaluation_one(ir_name, vi_name, f_name):
 
 if __name__ == "__main__":
     with_mean = True
-    results_root = os.path.join("/data/ykx/", "result/m3fd_fusion")
+    results_root = os.path.join("/data/ykx/", "result/msrs2m3fs")
     ir_dir = os.path.join("/data/ykx/M3FD/M3FD_Fusion", "ir")
     vi_dir = os.path.join("/data/ykx/M3FD/M3FD_Fusion", "vi")
     f_dir = os.path.join(results_root)
     save_dir = os.path.join("/home/ykx/ReCoNet/result/metric")
     os.makedirs(save_dir, exist_ok=True)
 
-    metric_save_name = os.path.join(save_dir, "m3fd.xlsx")
+    metric_save_name = os.path.join(save_dir, "msrs2m3fd.xlsx")
     # filelist = natsorted(os.listdir(ir_dir))
     filelist = os.listdir(ir_dir)
 
