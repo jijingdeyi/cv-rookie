@@ -35,17 +35,10 @@ def show_img(colors, background, img, clean, gt, *pds):
     return final
 
 def get_colors(class_num):
+    # get random color
     colors = []
     for i in range(class_num):
         colors.append((np.random.random((1,3)) * 255).tolist()[0])
-
-    return colors
-
-def get_ade_colors():
-    colors = scipy.io.loadmat('./color150.mat')['colors']
-    colors = colors[:,::-1,]
-    colors = np.array(colors).astype(int).tolist()
-    colors.insert(0,[0,0,0])
 
     return colors
 

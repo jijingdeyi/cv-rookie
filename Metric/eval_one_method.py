@@ -222,14 +222,13 @@ if __name__ == "__main__":
     with_mean = True
 
     # --- 路径与配置 ---
-    dataset_name = "msrs"
-    Method = "ours"  # 仅用于写入列首和文件名
-    ir_dir = os.path.join("/data/ykx/LLVIP/test", "ir")
-    vi_dir = os.path.join("/data/ykx/LLVIP/test", "vi")
-    f_dir = os.path.join("/data/ykx/result/llvip", "ours")  # 融合结果所在目录
+    Method = "pad"  # 仅用于写入列首和文件名
+    ir_dir = os.path.join("/data/ykx/MSRS/test", "ir")
+    vi_dir = os.path.join("/data/ykx/MSRS/test", "vi")
+    f_dir = os.path.join("/data/ykx/result/ablation", Method)  # 融合结果所在目录
     save_dir = os.path.join("/home/ykx/ReCoNet/result", "metric")
     os.makedirs(save_dir, exist_ok=True)
-    metric_save_name = os.path.join(save_dir, f"llvip_full_ablation.xlsx")
+    metric_save_name = os.path.join(save_dir, f"ablation.xlsx")
 
     # --- 计算指标 ---
     EN_list, MI_list, SF_list, AG_list, SD_list = [], [], [], [], []
