@@ -222,7 +222,7 @@ if __name__ == "__main__":
     with_mean = True
 
     # --- 路径与配置 ---
-    Method = "pad"  # 仅用于写入列首和文件名
+    Method = "weight"  # 仅用于写入列首和文件名
     ir_dir = os.path.join("/data/ykx/MSRS/test", "ir")
     vi_dir = os.path.join("/data/ykx/MSRS/test", "vi")
     f_dir = os.path.join("/data/ykx/result/ablation", Method)  # 融合结果所在目录
