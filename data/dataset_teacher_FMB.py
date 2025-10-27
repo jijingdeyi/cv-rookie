@@ -18,9 +18,9 @@ This dataset from SAGE is used to train the teacher model. We have made some mod
 1. We have changed the segmentation_aware_random_crop function order to ensure the label mask is cropped after the other images.
 2. add the checkpoint resume capability to the mask generation process.
 3. consistent add image masks every batch to prevent memory buildup.
-4. remove the redundant manual seed setting.
-5. use the use_mask_num to limit the number of masks processed, the original code has a logic error.
 """
+
+
 class Data(Dataset):
     def __init__(self, mode, use_mask_num=20, cache_mask_num=50, crop_size=(600, 800), cache_dir=None, root_dir='/data/ykx/FMB'):
         self.root_dir = root_dir
@@ -65,15 +65,16 @@ class Data(Dataset):
         # check if there is a cache file - note that here we use cache_mask_num as part of the cache file name
         cache_file = os.path.join(
             self.cache_dir, f'mask_cache_{mode}_{cache_mask_num}.pkl')
-        if os.path.exists(cache_file):
+
+        # Check if progress file exists (indicates incomplete mask generation)
+        progress_file = cache_file.replace('.pkl', '_progress.pkl')
+
+        if os.path.exists(cache_file) and not os.path.exists(progress_file):
             print(f"Loading mask cache from {cache_file}")
             self.mask_cache = self._load_cache_file(cache_file)
             print(
                 f"Loaded masks for {len(self.mask_cache)} images (cached: {cache_mask_num}, using: {use_mask_num})")
         else:
-            # initialize the SAM model and generate all masks
-            print(
-                f"Initializing SAM model and generating {cache_mask_num} masks per image...")
             self._initialize_sam_and_generate_masks(cache_file)
 
         # for tracking whether the zero mask warning has been printed
@@ -360,6 +361,10 @@ class Data(Dataset):
         vi_0_tensor = self.totensor(
             cv2.cvtColor(vi_0, cv2.COLOR_BGR2YCrCb))  # CHW
 
+        # Determine flip decision for all images (both train and test modes)
+        torch.manual_seed(seed)
+        flip_decision_main = torch.rand(1) < 0.5
+
         # use original label mask to guide other images cropping
         if self.mode == 'train':
             # Check if label mask is all zeros
@@ -387,11 +392,11 @@ class Data(Dataset):
                 vi_0_tensor = self.random_crop(
                     vi_0_tensor, seed, self.crop_size)
 
-            # Apply other transformations (such as horizontal flip)
-            torch.manual_seed(seed)
-            label_mask_tensor = self.transform(label_mask_tensor)
-            ir_0_tensor = self.transform(ir_0_tensor)
-            vi_0_tensor = self.transform(vi_0_tensor)
+            # Apply flip transformation for training mode
+            if flip_decision_main:
+                label_mask_tensor = torch.flip(label_mask_tensor, dims=[2])
+                ir_0_tensor = torch.flip(ir_0_tensor, dims=[2])
+                vi_0_tensor = torch.flip(vi_0_tensor, dims=[2])
 
         y_0 = vi_0_tensor[0, :, :].unsqueeze(dim=0).clone()
         cb = vi_0_tensor[1, :, :].unsqueeze(dim=0)
@@ -435,7 +440,7 @@ class Data(Dataset):
                     vi_2_tensor = self.totensor(
                         cv2.cvtColor(vis_masked, cv2.COLOR_BGR2YCrCb))
 
-                    # In training mode, use segmentation-aware random cropping
+                    # Apply cropping based on mode
                     if self.mode == 'train':
                         # Use same cropping and transformation as original images
                         if torch.sum(label_mask_tensor) > 0:
@@ -449,9 +454,10 @@ class Data(Dataset):
                             vi_2_tensor = self.random_crop(
                                 vi_2_tensor, seed, self.crop_size)
 
-                        torch.manual_seed(seed)
-                        ir_2_tensor = self.transform(ir_2_tensor)
-                        vi_2_tensor = self.transform(vi_2_tensor)
+                    # Apply flip transformation for both train and test modes
+                    if self.mode == 'train' and flip_decision_main:
+                        ir_2_tensor = torch.flip(ir_2_tensor, dims=[2])
+                        vi_2_tensor = torch.flip(vi_2_tensor, dims=[2])
 
                     y = vi_2_tensor[0, :, :].unsqueeze(dim=0)
 
@@ -471,12 +477,22 @@ class Data(Dataset):
 
         # If insufficient masks, fill with original images
         while len(irs) < self.use_mask_num:
-            irs.append(ir_0_tensor.clone())
-            ys.append(y_0.clone())
+            # Use same flip decision as main images for consistency
+            fill_ir = ir_0_tensor.clone()
+            fill_y = y_0.clone()
+
+            irs.append(fill_ir)
+            ys.append(fill_y)
 
         ys_0 = torch.cat(ys, dim=0)
         irs_0 = torch.cat(irs, dim=0)
 
+        """
+        ir : ir image enhanced with original mask, crop size
+        y: vi image enhanced with original mask, crop size
+        irs: ir images enhanced with sam masks, len(irs) = use_mask_num, range 0 or original pixel value, same size as original image
+        ys: vi images enhanced with sam masks, len(ys) = use_mask_num, range 0 or original pixel value, same size as original image
+        """
         result = {'name': name_0, 'irs': irs_0, 'ys': ys_0, 'label': label,
                   'ir': ir_0_tensor, 'y': y_0, 'cb': cb, 'cr': cr, 'label_mask': label_mask_tensor}
 
