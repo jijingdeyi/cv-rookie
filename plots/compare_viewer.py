@@ -255,7 +255,5 @@ python plots/compare_viewer.py \
   --strict-intersection \
   --cols 0
 
-python plots/compare_viewer.py --root /home/ykx/ReCoNet/result/msrs --ref IR:/data/ykx/MSRS/test/ir --ref VI:/data/ykx/MSRS/test/vi --methods ori grad 
-tcmoa ours --out-dir temp --cols 0
-
+python plots/compare_viewer.py --root /home/ykx/ReCoNet/result/msrs --ref IR:/data/ykx/MSRS/test/ir --ref VI:/data/ykx/MSRS/test/vi --methods ori grad tcmoa ours --out-dir temp --cols 0
 """
