@@ -41,6 +41,7 @@ class Sobelxy(nn.Module):
 
 # ----------- grad loss from TC-MoA -----------
 
+
 class SobelxyRGB(nn.Module):
     def __init__(self, isSignGrad=True):
         super(SobelxyRGB, self).__init__()
@@ -106,26 +107,27 @@ class MaxGradLoss(nn.Module):
 
 # ----------- Multi-scale gradient loss with direction alignment -----------
 
+
 class Sobel2D(nn.Module):
     """Return Gx, Gy; using normal zero padding (padding=1)"""
 
     def __init__(self):
         super().__init__()
-        kx = torch.tensor([[-1, 0, 1],
-                           [-2, 0, 2],
-                           [-1, 0, 1]], dtype=torch.float32)[None, None]  # [1,1,3,3]
-        ky = torch.tensor([[-1, -2, -1],
-                           [0,  0,  0],
-                           [1,  2,  1]], dtype=torch.float32)[None, None]  # [1,1,3,3]
-        self.register_buffer("kx", kx, persistent=False)
-        self.register_buffer("ky", ky, persistent=False)
+        kx = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32)[
+            None, None
+        ]  # [1,1,3,3]
+        ky = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32)[
+            None, None
+        ]  # [1,1,3,3]
+        self.kx = nn.Parameter(kx, requires_grad=False)
+        self.ky = nn.Parameter(ky, requires_grad=False)
 
     def forward(self, x: torch.Tensor):
         C = x.shape[1]
-        kx = self.kx.repeat(C, 1, 1, 1)  # [C,1,3,3]
-        ky = self.ky.repeat(C, 1, 1, 1)  # [C,1,3,3]
-        gx = F.conv2d(x, kx, padding=1, groups=C)
-        gy = F.conv2d(x, ky, padding=1, groups=C)
+        kernel_x = self.kx.repeat(C, 1, 1, 1)  # [C,1,3,3]
+        kernel_y = self.ky.repeat(C, 1, 1, 1)  # [C,1,3,3]
+        gx = F.conv2d(x, kernel_x, padding=1, groups=C)
+        gy = F.conv2d(x, kernel_y, padding=1, groups=C)
         return gx, gy
 
 
@@ -152,27 +154,30 @@ class GradlossAligned(nn.Module):
         H, W = x.shape[-2:]
         Hs = max(1, int(round(H * ratio)))
         Ws = max(1, int(round(W * ratio)))
-        return F.interpolate(x, size=(Hs, Ws), mode='bilinear', align_corners=False)
+        return F.interpolate(x, size=(Hs, Ws), mode="bilinear", align_corners=False)
 
-    def forward(self, image_vis: torch.Tensor, image_ir: torch.Tensor, generate_img: torch.Tensor):
+    def forward(
+        self,
+        image_vis: torch.Tensor,
+        image_ir: torch.Tensor,
+        generate_img: torch.Tensor,
+    ):
         # luminance proxy: first channel of VIS
         image_y = image_vis[:, :1, :, :]
 
         loss = 0.0
         for ratio, w in zip(self.scales, self.scale_weights):
             gen_s = self._resize(generate_img, ratio)
-            y_s = self._resize(image_y,    ratio)
-            ir_s = self._resize(image_ir,   ratio)
+            y_s = self._resize(image_y, ratio)
+            ir_s = self._resize(image_ir, ratio)
 
             gx_f, gy_f = self.sobel2d(gen_s)
             gx_y, gy_y = self.sobel2d(y_s)
             gx_ir, gy_ir = self.sobel2d(ir_s)
 
             # axis-wise, sign-preserving hard selection
-            sel_gx = torch.where(
-                torch.abs(gx_y) >= torch.abs(gx_ir), gx_y, gx_ir)
-            sel_gy = torch.where(
-                torch.abs(gy_y) >= torch.abs(gy_ir), gy_y, gy_ir)
+            sel_gx = torch.where(torch.abs(gx_y) >= torch.abs(gx_ir), gx_y, gx_ir)
+            sel_gy = torch.where(torch.abs(gy_y) >= torch.abs(gy_ir), gy_y, gy_ir)
 
             loss_s = F.l1_loss(gx_f, sel_gx) + F.l1_loss(gy_f, sel_gy)
             loss = loss + w * loss_s
