@@ -39,6 +39,33 @@ class Sobelxy(nn.Module):
         return torch.abs(sobelx) + torch.abs(sobely)
 
 
+# ------------ Gradient Max Loss from LUT-Fuse-----------
+# 逐方向选最大，但是没有考虑方向，只是简单选幅值最大，比上一版好一点
+class GradientMaxLoss(nn.Module):
+    def __init__(self):
+        super(GradientMaxLoss, self).__init__()
+        self.sobel_x = nn.Parameter(torch.FloatTensor([[-1, 0, 1],
+                                                       [-2, 0, 2],
+                                                       [-1, 0, 1]]).view(1, 1, 3, 3), requires_grad=False).cuda()
+        self.sobel_y = nn.Parameter(torch.FloatTensor([[-1, -2, -1],
+                                                       [0, 0, 0],
+                                                       [1, 2, 1]]).view(1, 1, 3, 3), requires_grad=False).cuda()
+        self.padding = (1, 1, 1, 1)
+
+    def forward(self, image_A, image_B, image_fuse):
+        gradient_A_x, gradient_A_y = self.gradient(image_A)
+        gradient_B_x, gradient_B_y = self.gradient(image_B)
+        gradient_fuse_x, gradient_fuse_y = self.gradient(image_fuse)
+        loss = F.l1_loss(gradient_fuse_x, torch.max(gradient_A_x, gradient_B_x)) + F.l1_loss(gradient_fuse_y, torch.max(gradient_A_y, gradient_B_y))
+        return loss
+
+    def gradient(self, image):
+        image = F.pad(image, self.padding, mode='replicate')
+        gradient_x = F.conv2d(image, self.sobel_x, padding=0)
+        gradient_y = F.conv2d(image, self.sobel_y, padding=0)
+        return torch.abs(gradient_x), torch.abs(gradient_y)
+
+
 # ----------- grad loss from TC-MoA -----------
 
 
