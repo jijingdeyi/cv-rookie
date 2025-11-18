@@ -24,8 +24,7 @@ class RandomCropPair:
         return vis_img, ir_img
 
 class SimpleDataSet(Dataset):
-    def __init__(self, visible_path, infrared_path, phase="train", transform=None):
-        self.phase = phase
+    def __init__(self, visible_path, infrared_path, transform=None):
         self.visible_files = sorted(glob(os.path.join(visible_path, "*.*")))
         self.infrared_files = sorted(glob(os.path.join(infrared_path, "*.*")))
         self.transform = transform
