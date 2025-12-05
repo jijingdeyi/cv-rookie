@@ -102,5 +102,5 @@ testloader = DataLoader(
     shuffle=False,
     pin_memory=True,
     num_workers=4,
-    drop_last=True,
+    drop_last=False,
 )
