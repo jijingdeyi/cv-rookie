@@ -210,3 +210,42 @@ class GradlossAligned(nn.Module):
             loss = loss + w * loss_s
 
         return loss
+
+
+# ------------ Gradient Max Loss from MMIF-INet----------
+class Sobelxy_MMIF(nn.Module):
+    def __init__(self):
+        super(Sobelxy_MMIF, self).__init__()
+        kernelx = [[-1, 0, 1],
+                   [-2, 0, 2],
+                   [-1, 0, 1]]
+        kernely = [[1, 2, 1],
+                   [0, 0, 0],
+                   [-1, -2, -1]]
+
+        # 保持你原来的 nn.Parameter 写法
+        kernelx = torch.FloatTensor(kernelx).unsqueeze(0).unsqueeze(0)  # (1,1,3,3)
+        kernely = torch.FloatTensor(kernely).unsqueeze(0).unsqueeze(0)
+
+        self.weightx = nn.Parameter(kernelx, requires_grad=False)
+        self.weighty = nn.Parameter(kernely, requires_grad=False)
+
+    def forward(self, x):
+        # x: (B,C,H,W)
+        B, C, H, W = x.shape
+
+        # 扩展 kernel 使其对每个通道独立作用
+        # (1,1,3,3) → (C,1,3,3)
+        weightx = self.weightx.repeat(C, 1, 1, 1)
+        weighty = self.weighty.repeat(C, 1, 1, 1)
+
+        # 将所有 batch 和 channel 展开后一次卷积
+        x_reshaped = x.view(1, B*C, H, W)
+
+        gx = F.conv2d(x_reshaped, weightx, padding=1, groups=C)
+        gy = F.conv2d(x_reshaped, weighty, padding=1, groups=C)
+
+        g = torch.abs(gx) + torch.abs(gy)
+
+        return g.view(B, C, H, W)
+
