@@ -67,8 +67,8 @@ plt.figure(figsize=(12, 6))
 # 堆叠柱
 ax1 = plt.gca()  # 获取左轴引用
 bottom = np.zeros(len(methods))
-colors = plt.get_cmap('tab10')(np.linspace(0, 1, len(metrics)))
-colors = colors[:len(metrics)]  # 确保颜色数组长度正确
+colors = plt.get_cmap("tab20")(np.linspace(0, 1, len(metrics)))  # 使用不同的调色板
+colors = colors[: len(metrics)]  # 确保颜色数组长度正确
 
 # 保存第一层的柱子对象，用于后续定位
 first_layer_bars = None
@@ -98,35 +98,56 @@ if first_layer_bars is not None:
             va="bottom",
             fontsize=10,
             fontweight="bold",
+            color="blue",  # 与左坐标轴颜色一致
         )
 
-# 设置左轴标题
-ax1.set_ylabel("Ranking (Lower is Better)", fontsize=12)
+# 设置左轴标题和颜色
+ax1.set_ylabel("Ranking (Lower is Better)", fontsize=12, color="blue")
 ax1.set_xlabel("Methods", fontsize=12)
 ax1.tick_params(axis="x", rotation=25)
+ax1.tick_params(axis="y", labelcolor="blue", color="blue")  # 左轴刻度标签和tick颜色
+ax1.spines["left"].set_color("blue")  # 左轴颜色
+ax1.spines["top"].set_visible(False)  # 隐藏顶部横线
 
 # 右轴画 test time（假设已经有字典 test_time）
 times = np.array([test_time[m] for m in methods])
 ax2 = ax1.twinx()
-ax2.plot(methods, times, color="black", marker="o", linewidth=2, label="Test Time (s)")  # type: ignore
-ax2.set_ylabel("Test Time (s)", fontsize=12)
+line = ax2.plot(methods, times, color="red", marker="*", linestyle="--", linewidth=2, label="Test Time (s)")  # type: ignore
+ax2.set_ylabel("Test Time (s)", fontsize=12, color="red")
+ax2.tick_params(axis="y", labelcolor="red", colors="red")  # 右轴刻度标签和tick颜色
+ax2.spines["right"].set_color("red")  # 右轴颜色
+ax2.spines["top"].set_visible(False)  # 隐藏顶部横线
 
-plt.title("Overall Comparison of Methods", fontsize=14)
+# 在折线图的每个数据点上显示数值，与点分开一点
+x_positions = range(len(methods))
+# 计算y轴范围，用于确定偏移量
+y_range = ax2.get_ylim()[1] - ax2.get_ylim()[0]
+offset = y_range * 0.05  # 偏移量为y轴范围的5%
+for x_pos, time in zip(x_positions, times):
+    ax2.text(  # type: ignore
+        x_pos,
+        time + offset,  # 在点的上方添加偏移量
+        f"{time:.3f}",
+        ha="center",
+        va="bottom",
+        fontsize=8,
+        color="red",
+    )  # type: ignore
 
-# 合并图例：左轴和右轴的 label 一起
+# 合并图例：左轴和右轴的 label 一起，放在图片上方
 handles1, labels1 = ax1.get_legend_handles_labels()  # type: ignore
 handles2, labels2 = ax2.get_legend_handles_labels()  # type: ignore
 ax1.legend(
     handles1 + handles2,
     labels1 + labels2,
-    loc="upper left",
-    bbox_to_anchor=(1.15, 1),  # 调整图例位置，更靠右避免重叠
-    borderaxespad=0,
+    loc="upper center",
+    bbox_to_anchor=(0.5, 1.15),  # 放在图片上方居中
+    ncol=len(metrics) + 1,  # 图例列数
     frameon=True,
 )
 
-# 调整布局，为图例留出更多空间
-plt.tight_layout(rect=(0, 0, 0.88, 1))  # (left, bottom, right, top)
+# 调整布局
+plt.tight_layout(rect=(0, 0, 1, 0.95))  # 为上方图例留出空间
 
 # 创建 output 文件夹（如果不存在）
 output_dir = Path("output")
