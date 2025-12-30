@@ -3,7 +3,7 @@ import torchvision
 import torch.nn as nn
 import torch.nn.functional as F
 
-from loss.ssim import ssim
+from pytorch_msssim import ssim
 
 
 class fusion_loss_general(nn.Module):
@@ -14,9 +14,10 @@ class fusion_loss_general(nn.Module):
         self.L_SSIM = L_SSIM()
 
     def features_grad(self, features):
-        kernel = torch.tensor([[1 / 8, 1 / 8, 1 / 8],
-                               [1 / 8, -1, 1 / 8],
-                               [1 / 8, 1 / 8, 1 / 8]], dtype=torch.float32).to(features.device)
+        kernel = torch.tensor(
+            [[1 / 8, 1 / 8, 1 / 8], [1 / 8, -1, 1 / 8], [1 / 8, 1 / 8, 1 / 8]],
+            dtype=torch.float32,
+        ).to(features.device)
         n, c, h, w = features.shape
         kernel = kernel.repeat(c, 1, 1, 1)
         # kernel = kernel.unsqueeze(1)
@@ -44,7 +45,9 @@ class fusion_loss_general(nn.Module):
 
         s1 = torch.mean(ws1, dim=-1) / c
         s2 = torch.mean(ws2, dim=-1) / c
-        weights = torch.softmax(torch.cat([s1.unsqueeze(-1), s2.unsqueeze(-1)], dim=-1), dim=-1)
+        weights = torch.softmax(
+            torch.cat([s1.unsqueeze(-1), s2.unsqueeze(-1)], dim=-1), dim=-1
+        )
         return weights[:, 0], weights[:, 1]
 
     def forward(self, image_A, image_B, image_fused, weight_A, weight_B):
@@ -56,7 +59,7 @@ class fusion_loss_general(nn.Module):
 
 def Fro_LOSS(batchimg):
     n, c, h, w = batchimg.shape
-    fro_norm = (torch.norm(batchimg, dim=[2, 3], p='fro')) ** 2 / (h * w)
+    fro_norm = (torch.norm(batchimg, dim=[2, 3], p="fro")) ** 2 / (h * w)
     return torch.mean(fro_norm, dim=1)
 
 
@@ -76,34 +79,48 @@ class L_SSIM(nn.Module):
         super(L_SSIM, self).__init__()
 
     def forward(self, image_A, image_B, image_fused, weight_A, weight_B):
+        assert weight_A + weight_B == 1.0
         Loss_SSIM = weight_A * ssim(image_A, image_fused) + weight_B * ssim(image_B, image_fused)
-        return 1. - torch.mean(Loss_SSIM)
+        return 1.0 - Loss_SSIM
 
 
 class VGGFeatureExtractor(nn.Module):
-    def __init__(self, feature_layer=[2, 7, 16, 25, 34], use_input_norm=True, use_range_norm=False):
+    def __init__(
+        self,
+        feature_layer=[2, 7, 16, 25, 34],
+        use_input_norm=True,
+        use_range_norm=False,
+    ):
         super(VGGFeatureExtractor, self).__init__()
-        '''
+        """
 		use_input_norm: If True, x: [0, 1] --> (x - mean) / std
 		use_range_norm: If True, x: [0, 1] --> x: [-1, 1]
-		'''
+		"""
         model = torchvision.models.vgg19(pretrained=True)
         self.use_input_norm = use_input_norm
         self.use_range_norm = use_range_norm
         if self.use_input_norm:
             mean = torch.Tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
             std = torch.Tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
-            self.register_buffer('mean', mean)
-            self.register_buffer('std', std)
+            self.register_buffer("mean", mean)
+            self.register_buffer("std", std)
         self.list_outputs = isinstance(feature_layer, list)
         if self.list_outputs:
             self.features = nn.Sequential()
             feature_layer = [-1] + feature_layer
             for i in range(len(feature_layer) - 1):
-                self.features.add_module('child' + str(i), nn.Sequential(
-                    *list(model.features.children())[(feature_layer[i] + 1):(feature_layer[i + 1] + 1)]))
+                self.features.add_module(
+                    "child" + str(i),
+                    nn.Sequential(
+                        *list(model.features.children())[
+                            (feature_layer[i] + 1) : (feature_layer[i + 1] + 1)
+                        ]
+                    ),
+                )
         else:
-            self.features = nn.Sequential(*list(model.features.children())[:(feature_layer + 1)])
+            self.features = nn.Sequential(
+                *list(model.features.children())[: (feature_layer + 1)]
+            )
 
         # print(self.features)
 

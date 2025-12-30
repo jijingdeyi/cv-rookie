@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple
 
+# Pyramid Vision Transformer
+
 class SpatialReductionAttention(nn.Module):
     def __init__(self, dim, heads=8, sr_ratio=2, dropout=0.0):
         super().__init__()
