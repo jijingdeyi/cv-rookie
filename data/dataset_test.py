@@ -1,18 +1,17 @@
 import os.path
 import torch
 from torch.utils.data import Dataset
-import numpy as np
 from torchvision import transforms
 import cv2
 
 
 class Data(Dataset):
-    def __init__(self, mode, crop_size=(600, 800), img_dir='/mnt/disk1/IVIF/M3FD_4200'):
+    def __init__(self, mode, crop_size=(600, 800), img_dir='/data/ykx/MSRS/train'):
         self.img_dir = img_dir
 
-        # 获取IR和Vis文件夹中的所有文件，不限制扩展名
-        ir_files = os.listdir(os.path.join(self.img_dir, 'Ir'))
-        vis_files = os.listdir(os.path.join(self.img_dir, 'Vis'))
+        # 获取ir和vi文件夹中的所有文件，不限制扩展名
+        ir_files = os.listdir(os.path.join(self.img_dir, 'ir'))
+        vis_files = os.listdir(os.path.join(self.img_dir, 'vi'))
 
         # 创建文件名到扩展名的映射
         self.ir_extensions = {os.path.splitext(f)[0]: os.path.splitext(f)[1] for f in ir_files}
@@ -49,8 +48,8 @@ class Data(Dataset):
         # 优先使用可见光图像的扩展名
         file_ext = vis_ext
 
-        ir_path_0 = os.path.join(self.img_dir, 'Ir', name_0 + ir_ext)
-        vis_path_0 = os.path.join(self.img_dir, 'Vis', name_0 + vis_ext)
+        ir_path_0 = os.path.join(self.img_dir, 'ir', name_0 + ir_ext)
+        vis_path_0 = os.path.join(self.img_dir, 'vi', name_0 + vis_ext)
 
         ir_0 = cv2.imread(ir_path_0)
         vi_0 = cv2.imread(vis_path_0)
