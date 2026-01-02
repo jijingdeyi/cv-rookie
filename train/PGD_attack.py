@@ -95,7 +95,7 @@ if __name__ == "__main__":
     fused = model(image_vis, image_ir)    
 
     loss = nn.MSELoss()
-    attack_image_vis, attack_image_ir = attack(image_vis, image_ir, image_gt, model, loss)
+    attack_image_vis, attack_image_ir = attack(image_vis, image_ir, image_gt, model, loss, 8/255, 10, 32/255)
 
     Image.fromarray(image_ir.squeeze().detach().cpu().numpy()*255).convert('L').save('output/image_ir.png')
     Image.fromarray(image_vis.squeeze().detach().cpu().numpy()*255).convert('L').save('output/image_vis.png')
