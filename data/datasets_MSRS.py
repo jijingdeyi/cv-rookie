@@ -3,92 +3,77 @@ from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as T
 from natsort import natsorted
+import numpy as np
+
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
 
 # Dataset
-TRAIN_PATH = "/media/sata1/hedan/MSRS-main/train"
-VAL_PATH = "/media/sata1/hedan/MSRS-main/test"
-format_train = "png"
-format_val = "png"
-
-
-def to_rgb(image):
-    rgb_image = Image.new("RGB", image.size)
-    rgb_image.paste(image)
-    return rgb_image
-
-
-def get_list(root_dir, img_path):
-    """
-    路径已经被集成在.txt里面，给根目录和文件路径就可以直接读取
-    遍历MRI_filenames即获得相应位置的图像路径
-    """
-    MRI_list, other_list = [], []
-    f = open(img_path)
-    lines = f.readlines()
-    for line in lines:
-        line1, line2 = line.strip().split(" ")
-        MRI_list.append(root_dir + line1)
-        other_list.append(root_dir + line2)
-    return MRI_list, other_list
+TRAIN_PATH = "/data/ykx/MSRS/train"
+VAL_PATH = "/data/ykx/MSRS/test"
 
 
 class Hinet_Dataset(Dataset):
-    def __init__(self, transforms_=T.Compose([T.ToTensor()]), mode="train"):
+    def __init__(self, transforms_=A.Compose([ToTensorV2()]), mode="train"):
 
         self.transform = transforms_
         self.mode = mode
         if mode == "train":
-            # train
             self.files1 = natsorted(glob.glob(TRAIN_PATH + "/ir/*"))
             self.files2 = natsorted(glob.glob(TRAIN_PATH + "/vi/*"))
         else:
             self.files1 = natsorted(glob.glob(VAL_PATH + "/ir/*"))
             self.files2 = natsorted(glob.glob(VAL_PATH + "/vi/*"))
-            # print(VAL_PATH1 + "MRI/*." + c.format_val)
-            # self.files1 = sorted(glob.glob(VAL_PATH1 + "/MRI/*." + c.format_val))
-            # self.files2 = sorted(glob.glob(VAL_PATH1 + "/PET/*." + c.format_val))
 
     def __getitem__(self, index):
         try:
-            image = Image.open(self.files1[index])
-            image = to_rgb(image)
-            # image = Image.open(self.files1[index]).convert('L')
-            item = self.transform(image)
-
-            image1 = Image.open(self.files2[index])
-            image1 = to_rgb(image1)
-            # image1 = Image.open(self.files2[index]).convert('L')
-            item1 = self.transform(image1)
-            return item, item1
+            image_ir = Image.open(self.files1[index]).convert('L')
+            image_vi = Image.open(self.files2[index]).convert('RGB')
+            image_ir = np.array(image_ir)
+            image_vi = np.array(image_vi)
+            
+            # ToTensorV2 不会自动归一化，需要先转换为 float32 并除以 255
+            image_ir = image_ir.astype(np.float32) / 255.0
+            image_vi = image_vi.astype(np.float32) / 255.0
+            
+            augmented = self.transform(image=image_vi, image_ir=image_ir)
+            vi_tensor = augmented["image"]       # (3, H, W), range [0, 1]
+            ir_tensor = augmented["image_ir"]    # (1, H, W), range [0, 1]
+            return ir_tensor, vi_tensor
 
         except:
             return self.__getitem__(index + 1)
 
     def __len__(self):
-        # Return the length of files1 (should match files2 for paired images)
-        # If files1 and files2 have different lengths, return the minimum to avoid index errors
         return min(len(self.files1), len(self.files2))
 
 
-transform = T.Compose(
+# 训练增强：两张图共享同一组随机变换
+train_transform = A.Compose(
     [
-        T.RandomHorizontalFlip(),
-        T.RandomVerticalFlip(),
-        T.RandomCrop(128),
-        T.ToTensor(),
-    ]
+        A.HorizontalFlip(p=0.5),
+        A.VerticalFlip(p=0.5),
+        A.RandomCrop(height=256, width=256),
+        ToTensorV2(),  # 同时作用到 image 和 additional_targets
+    ],
+    additional_targets={
+        "image_ir": "image",
+    },
 )
 
-transform_val = T.Compose(
+val_transform = A.Compose(
     [
-        T.ToTensor(),
-    ]
+        ToTensorV2(),
+    ],
+    additional_targets={
+        "image_ir": "image",
+    },
 )
 
 
 # Training data loader
 trainloader = DataLoader(
-    Hinet_Dataset(transforms_=transform, mode="train"),
+    Hinet_Dataset(transforms_=train_transform, mode="train"),
     batch_size=4,
     shuffle=True,
     pin_memory=True,
@@ -97,10 +82,16 @@ trainloader = DataLoader(
 )
 # Test data loader
 testloader = DataLoader(
-    Hinet_Dataset(transforms_=transform_val, mode="val"),
+    Hinet_Dataset(transforms_=val_transform, mode="val"),
     batch_size=1,
     shuffle=False,
     pin_memory=True,
     num_workers=4,
     drop_last=False,
 )
+
+
+if __name__ == "__main__":
+    for ir, vi in trainloader:
+        print(ir.shape, vi.shape)
+        break
