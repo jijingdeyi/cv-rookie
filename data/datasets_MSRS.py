@@ -11,7 +11,7 @@ from albumentations.pytorch import ToTensorV2
 TRAIN_PATH = "/data/ykx/MSRS/train"
 TEST_PATH = "/data/ykx/MSRS/test"
 
-VAL_RATIO = 0.1  
+VAL_RATIO = 0.02
 RANDOM_SEED = 42  
 
 

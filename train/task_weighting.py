@@ -1,7 +1,7 @@
 import copy
 import random
 from abc import abstractmethod
-from typing import Dict, List, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import cvxpy as cp
 import numpy as np
@@ -44,7 +44,6 @@ class MinNormSolver:
         """
         Find the minimum norm solution as combination of two points
         This is correct only in 2D
-        ie. min_c |\sum c_i x_i|_2^2 st. \sum c_i = 1 , 1 >= c_1 >= 0 for all i, c_i + c_j = 1.0 for some i, j
         """
         dmin = 1e8
         for i in range(len(vecs)):
@@ -78,7 +77,7 @@ class MinNormSolver:
 
     @staticmethod
     def _projection2simplex(y):
-        """
+        r"""
         Given y, it solves argmin_z |y-z|_2 st \sum z = 1 , 1 >= z_i >= 0 for all i
         """
         m = len(y)
@@ -112,7 +111,7 @@ class MinNormSolver:
 
     @staticmethod
     def find_min_norm_element(vecs):
-        """
+        r"""
         Given a list of vectors (vecs), this method finds the minimum norm element in the convex hull
         as min |u|_2 st. u = \sum c_i vecs[i] and \sum c_i = 1.
         It is quite geometric, and the main idea is the fact that if d_{ij} = min |u|_2 st u = c x_i + (1-c) x_j; the solution lies in (0, d_{i,j})
@@ -159,7 +158,7 @@ class MinNormSolver:
 
     @staticmethod
     def find_min_norm_element_FW(vecs):
-        """
+        r"""
         Given a list of vectors (vecs), this method finds the minimum norm element in the convex hull
         as min |u|_2 st. u = \sum c_i vecs[i] and \sum c_i = 1.
         It is quite geometric, and the main idea is the fact that if d_{ij} = min |u|_2 st u = c x_i + (1-c) x_j; the solution lies in (0, d_{i,j})
@@ -235,12 +234,12 @@ class WeightMethod:
     def get_weighted_loss(
             self,
             losses: torch.Tensor,
-            shared_parameters: Union[List[torch.nn.parameter.Parameter], torch.Tensor],
-            task_specific_parameters: Union[
+            shared_parameters: Optional[Union[List[torch.nn.parameter.Parameter], torch.Tensor]] = None,
+            task_specific_parameters: Optional[Union[
                 List[torch.nn.parameter.Parameter], torch.Tensor
-            ],
-            last_shared_parameters: Union[List[torch.nn.parameter.Parameter], torch.Tensor],
-            representation: Union[torch.nn.parameter.Parameter, torch.Tensor],
+            ]] = None,
+            last_shared_parameters: Optional[Union[List[torch.nn.parameter.Parameter], torch.Tensor]] = None,
+            representation: Optional[Union[torch.nn.parameter.Parameter, torch.Tensor]] = None,
             **kwargs,
     ):
         pass
@@ -248,18 +247,18 @@ class WeightMethod:
     def backward(
             self,
             losses: torch.Tensor,
-            shared_parameters: Union[
+            shared_parameters: Optional[Union[
                 List[torch.nn.parameter.Parameter], torch.Tensor
-            ] = None,
-            task_specific_parameters: Union[
+            ]] = None,
+            task_specific_parameters: Optional[Union[
                 List[torch.nn.parameter.Parameter], torch.Tensor
-            ] = None,
-            last_shared_parameters: Union[
+            ]] = None,
+            last_shared_parameters: Optional[Union[
                 List[torch.nn.parameter.Parameter], torch.Tensor
-            ] = None,
-            representation: Union[List[torch.nn.parameter.Parameter], torch.Tensor] = None,
+            ]] = None,
+            representation: Optional[Union[List[torch.nn.parameter.Parameter], torch.Tensor]] = None,
             **kwargs,
-    ) -> Tuple[Union[torch.Tensor, None], Union[dict, None]]:
+    ) -> Tuple[Optional[torch.Tensor], Optional[dict]]:
         """
 
         Parameters
@@ -275,16 +274,27 @@ class WeightMethod:
         -------
         Loss, extra outputs
         """
-        loss, extra_outputs = self.get_weighted_loss(
+        # Handle representation type conversion if needed
+        rep: Optional[Union[torch.nn.parameter.Parameter, torch.Tensor]] = None
+        if representation is not None:
+            if isinstance(representation, list) and len(representation) > 0:
+                rep = representation[0]  # type: ignore
+            elif not isinstance(representation, list):
+                rep = representation  # type: ignore
+        
+        result = self.get_weighted_loss(
             losses=losses,
             shared_parameters=shared_parameters,
             task_specific_parameters=task_specific_parameters,
             last_shared_parameters=last_shared_parameters,
-            representation=representation,
+            representation=rep,
             **kwargs,
         )
+        if not isinstance(result, tuple) or len(result) != 2:
+            raise ValueError("get_weighted_loss must return a tuple of (loss, extra_outputs)")
+        loss, extra_outputs = result  # type: ignore
 
-        if self.max_norm > 0:
+        if self.max_norm > 0 and shared_parameters is not None:
             torch.nn.utils.clip_grad_norm_(shared_parameters, self.max_norm)
 
         loss.backward()
@@ -293,12 +303,12 @@ class WeightMethod:
     def __call__(
             self,
             losses: torch.Tensor,
-            shared_parameters: Union[
+            shared_parameters: Optional[Union[
                 List[torch.nn.parameter.Parameter], torch.Tensor
-            ] = None,
-            task_specific_parameters: Union[
+            ]] = None,
+            task_specific_parameters: Optional[Union[
                 List[torch.nn.parameter.Parameter], torch.Tensor
-            ] = None,
+            ]] = None,
             **kwargs,
     ):
         return self.backward(
@@ -322,7 +332,7 @@ class FAMO(WeightMethod):
             device: torch.device,
             gamma: float = 1e-5,
             w_lr: float = 0.025,
-            task_weights: Union[List[float], torch.Tensor] = None,
+            task_weights: Optional[Union[List[float], torch.Tensor]] = None,
             max_norm: float = 1.0,
     ):
         super().__init__(n_tasks, device=device)
@@ -379,33 +389,43 @@ class NashMTL(WeightMethod):
         self.prvs_alpha = np.ones(self.n_tasks, dtype=np.float32)
 
     def _stop_criteria(self, gtg, alpha_t):
+        if self.alpha_param is None or self.alpha_param.value is None:
+            return True
+        if self.prvs_alpha_param is None or self.prvs_alpha_param.value is None:
+            return False
         return (
-                (self.alpha_param.value is None)
-                or (np.linalg.norm(gtg @ alpha_t - 1 / (alpha_t + 1e-10)) < 1e-3)
+                (np.linalg.norm(gtg @ alpha_t - 1 / (alpha_t + 1e-10)) < 1e-3)
                 or (
                         np.linalg.norm(self.alpha_param.value - self.prvs_alpha_param.value)
                         < 1e-6
                 )
         )
 
-    def solve_optimization(self, gtg: np.array):
-        self.G_param.value = gtg
-        self.normalization_factor_param.value = self.normalization_factor
+    def solve_optimization(self, gtg: np.ndarray):
+        if self.G_param is not None:
+            self.G_param.value = gtg
+        if self.normalization_factor_param is not None:
+            self.normalization_factor_param.value = self.normalization_factor
 
         alpha_t = self.prvs_alpha
         for _ in range(self.optim_niter):
-            self.alpha_param.value = alpha_t
-            self.prvs_alpha_param.value = alpha_t
+            if self.alpha_param is not None:
+                self.alpha_param.value = alpha_t
+            if self.prvs_alpha_param is not None:
+                self.prvs_alpha_param.value = alpha_t
 
             try:
-                self.prob.solve(solver=cp.ECOS, warm_start=True, max_iters=100)
+                if self.prob is not None and cp is not None:
+                    self.prob.solve(solver=cp.ECOS, warm_start=True, max_iters=100)
             except:
-                self.alpha_param.value = self.prvs_alpha_param.value
+                if self.alpha_param is not None and self.prvs_alpha_param is not None:
+                    self.alpha_param.value = self.prvs_alpha_param.value
 
             if self._stop_criteria(gtg, alpha_t):
                 break
 
-            alpha_t = self.alpha_param.value
+            if self.alpha_param is not None and self.alpha_param.value is not None:
+                alpha_t = self.alpha_param.value
 
         if alpha_t is not None:
             self.prvs_alpha = alpha_t
@@ -413,6 +433,8 @@ class NashMTL(WeightMethod):
         return self.prvs_alpha
 
     def _calc_phi_alpha_linearization(self):
+        if self.G_param is None or self.prvs_alpha_param is None or self.alpha_param is None:
+            return 0.0
         G_prvs_alpha = self.G_param @ self.prvs_alpha_param
         prvs_phi_tag = 1 / self.prvs_alpha_param + (1 / G_prvs_alpha) @ self.G_param
         phi_alpha = prvs_phi_tag @ (self.alpha_param - self.prvs_alpha_param)
@@ -448,7 +470,7 @@ class NashMTL(WeightMethod):
     def get_weighted_loss(
             self,
             losses,
-            shared_parameters,
+            shared_parameters=None,
             **kwargs,
     ):
         """
@@ -472,6 +494,8 @@ class NashMTL(WeightMethod):
             self.step += 1
 
             grads = {}
+            if shared_parameters is None:
+                raise ValueError("shared_parameters cannot be None for NashMTL")
             for i, loss in enumerate(losses):
                 g = list(
                     torch.autograd.grad(
@@ -510,7 +534,7 @@ class LinearScalarization(WeightMethod):
             self,
             n_tasks: int,
             device: torch.device,
-            task_weights: Union[List[float], torch.Tensor] = None,
+            task_weights: Optional[Union[List[float], torch.Tensor]] = None,
     ):
         super().__init__(n_tasks, device=device)
         if task_weights is None:
@@ -532,7 +556,7 @@ class ScaleInvariantLinearScalarization(WeightMethod):
             self,
             n_tasks: int,
             device: torch.device,
-            task_weights: Union[List[float], torch.Tensor] = None,
+            task_weights: Optional[Union[List[float], torch.Tensor]] = None,
     ):
         super().__init__(n_tasks, device=device)
         if task_weights is None:
@@ -604,6 +628,8 @@ class MGDA(WeightMethod):
         params = dict(
             rep=representation, shared=shared_parameters, last=last_shared_parameters
         )[self.params]
+        if params is None:
+            raise ValueError(f"Parameters for '{self.params}' are None")
         for i, loss in enumerate(losses):
             g = list(
                 torch.autograd.grad(
@@ -618,12 +644,19 @@ class MGDA(WeightMethod):
 
         gn = gradient_normalizers(grads, losses, self.normalization)
         for t in range(self.n_tasks):
-            for gr_i in range(len(grads[t])):
-                grads[t][gr_i] = grads[t][gr_i] / gn[t]
+            if t in grads and grads[t] is not None:
+                for gr_i in range(len(grads[t])):
+                    grads[t][gr_i] = grads[t][gr_i] / gn[t]
 
-        sol, min_norm = self.solver.find_min_norm_element(
-            [grads[t] for t in range(len(grads))]
-        )
+        valid_grads = [grads[t] for t in range(len(grads)) if t in grads and grads[t] is not None]
+        if not valid_grads:
+            raise ValueError("No valid gradients found")
+        result = self.solver.find_min_norm_element(valid_grads)
+        if result is None:
+            raise ValueError("find_min_norm_element returned None")
+        sol, min_norm = result
+        if sol is None:
+            raise ValueError("Solution is None")
         sol = sol * self.n_tasks  # make sure it sums to self.n_tasks
         weighted_loss = sum([losses[i] * sol[i] for i in range(len(sol))])
 
@@ -689,6 +722,8 @@ class LOG_MGDA(WeightMethod):
         params = dict(
             rep=representation, shared=shared_parameters, last=last_shared_parameters
         )[self.params]
+        if params is None:
+            raise ValueError(f"Parameters for '{self.params}' are None")
         for i, loss in enumerate(losses):
             g = list(
                 torch.autograd.grad(
@@ -703,12 +738,19 @@ class LOG_MGDA(WeightMethod):
 
         gn = gradient_normalizers(grads, losses, self.normalization)
         for t in range(self.n_tasks):
-            for gr_i in range(len(grads[t])):
-                grads[t][gr_i] = grads[t][gr_i] / gn[t]
+            if t in grads and grads[t] is not None:
+                for gr_i in range(len(grads[t])):
+                    grads[t][gr_i] = grads[t][gr_i] / gn[t]
 
-        sol, min_norm = self.solver.find_min_norm_element(
-            [grads[t] for t in range(len(grads))]
-        )
+        valid_grads = [grads[t] for t in range(len(grads)) if t in grads and grads[t] is not None]
+        if not valid_grads:
+            raise ValueError("No valid gradients found")
+        result = self.solver.find_min_norm_element(valid_grads)
+        if result is None:
+            raise ValueError("find_min_norm_element returned None")
+        sol, min_norm = result
+        if sol is None:
+            raise ValueError("Solution is None")
         # sol = sol * self.n_tasks  # make sure it sums to self.n_tasks
         c = sum([sol[i] / (losses[i] + 1e-8).detach() for i in range(len(sol))])
         weighted_loss = sum([(losses[i] + 1e-8).log() * sol[i] / c for i in range(len(sol))])
@@ -776,18 +818,20 @@ class PCGrad(WeightMethod):
     def get_weighted_loss(
             self,
             losses: torch.Tensor,
-            shared_parameters: Union[
+            shared_parameters: Optional[Union[
                 List[torch.nn.parameter.Parameter], torch.Tensor
-            ] = None,
-            task_specific_parameters: Union[
+            ]] = None,
+            task_specific_parameters: Optional[Union[
                 List[torch.nn.parameter.Parameter], torch.Tensor
-            ] = None,
+            ]] = None,
             **kwargs,
     ):
         raise NotImplementedError
 
     def _set_pc_grads(self, losses, shared_parameters, task_specific_parameters=None):
         # shared part
+        if shared_parameters is None:
+            return
         shared_grads = []
         for l in losses:
             shared_grads.append(
@@ -798,7 +842,10 @@ class PCGrad(WeightMethod):
             shared_parameters = [shared_parameters]
         non_conflict_shared_grads = self._project_conflicting(shared_grads)
         for p, g in zip(shared_parameters, non_conflict_shared_grads):
-            p.grad = g
+            if isinstance(g, torch.Tensor):
+                p.grad = g
+            else:
+                p.grad = torch.tensor(g, dtype=p.dtype, device=p.device) if not isinstance(g, torch.Tensor) else g
 
         # task specific part
         if task_specific_parameters is not None:
@@ -837,18 +884,18 @@ class PCGrad(WeightMethod):
     def backward(
             self,
             losses: torch.Tensor,
-            parameters: Union[List[torch.nn.parameter.Parameter], torch.Tensor] = None,
-            shared_parameters: Union[
+            parameters: Optional[Union[List[torch.nn.parameter.Parameter], torch.Tensor]] = None,
+            shared_parameters: Optional[Union[
                 List[torch.nn.parameter.Parameter], torch.Tensor
-            ] = None,
-            task_specific_parameters: Union[
+            ]] = None,
+            task_specific_parameters: Optional[Union[
                 List[torch.nn.parameter.Parameter], torch.Tensor
-            ] = None,
+            ]] = None,
             **kwargs,
     ):
         self._set_pc_grads(losses, shared_parameters, task_specific_parameters)
         # make sure the solution for shared params has norm <= self.eps
-        if self.max_norm > 0:
+        if self.max_norm > 0 and shared_parameters is not None:
             torch.nn.utils.clip_grad_norm_(shared_parameters, self.max_norm)
         return None, {}  # NOTE: to align with all other weight methods
 
@@ -862,7 +909,7 @@ class CAGrad(WeightMethod):
     def get_weighted_loss(
             self,
             losses,
-            shared_parameters,
+            shared_parameters=None,
             **kwargs,
     ):
         """
@@ -875,6 +922,8 @@ class CAGrad(WeightMethod):
         -------
         """
         # NOTE: we allow only shared params for now. Need to see paper for other options.
+        if shared_parameters is None:
+            raise ValueError("shared_parameters cannot be None")
         grad_dims = []
         for param in shared_parameters:
             grad_dims.append(param.data.numel())
@@ -962,17 +1011,17 @@ class CAGrad(WeightMethod):
     def backward(
             self,
             losses: torch.Tensor,
-            parameters: Union[List[torch.nn.parameter.Parameter], torch.Tensor] = None,
-            shared_parameters: Union[
+            parameters: Optional[Union[List[torch.nn.parameter.Parameter], torch.Tensor]] = None,
+            shared_parameters: Optional[Union[
                 List[torch.nn.parameter.Parameter], torch.Tensor
-            ] = None,
-            task_specific_parameters: Union[
+            ]] = None,
+            task_specific_parameters: Optional[Union[
                 List[torch.nn.parameter.Parameter], torch.Tensor
-            ] = None,
+            ]] = None,
             **kwargs,
     ):
         GTG, w = self.get_weighted_loss(losses, shared_parameters)
-        if self.max_norm > 0:
+        if self.max_norm > 0 and shared_parameters is not None:
             torch.nn.utils.clip_grad_norm_(shared_parameters, self.max_norm)
         return None, {"GTG": GTG, "weights": w}  # NOTE: to align with all other weight methods
 
@@ -985,7 +1034,7 @@ class GradDrop(WeightMethod):
     def get_weighted_loss(
             self,
             losses,
-            shared_parameters,
+            shared_parameters=None,
             **kwargs,
     ):
         """
@@ -998,6 +1047,8 @@ class GradDrop(WeightMethod):
         -------
         """
         # NOTE: we allow only shared params for now. Need to see paper for other options.
+        if shared_parameters is None:
+            raise ValueError("shared_parameters cannot be None")
         grad_dims = []
         for param in shared_parameters:
             grad_dims.append(param.data.numel())
@@ -1052,18 +1103,18 @@ class GradDrop(WeightMethod):
     def backward(
             self,
             losses: torch.Tensor,
-            parameters: Union[List[torch.nn.parameter.Parameter], torch.Tensor] = None,
-            shared_parameters: Union[
+            parameters: Optional[Union[List[torch.nn.parameter.Parameter], torch.Tensor]] = None,
+            shared_parameters: Optional[Union[
                 List[torch.nn.parameter.Parameter], torch.Tensor
-            ] = None,
-            task_specific_parameters: Union[
+            ]] = None,
+            task_specific_parameters: Optional[Union[
                 List[torch.nn.parameter.Parameter], torch.Tensor
-            ] = None,
+            ]] = None,
             **kwargs,
     ):
         # GTG, w = self.get_weighted_loss(losses, shared_parameters)
         self.get_weighted_loss(losses, shared_parameters)
-        if self.max_norm > 0:
+        if self.max_norm > 0 and shared_parameters is not None:
             torch.nn.utils.clip_grad_norm_(shared_parameters, self.max_norm)
         return None, None  # NOTE: to align with all other weight methods
 
@@ -1077,7 +1128,7 @@ class LOG_CAGrad(WeightMethod):
     def get_weighted_loss(
             self,
             losses,
-            shared_parameters,
+            shared_parameters=None,
             **kwargs,
     ):
         """
@@ -1090,6 +1141,8 @@ class LOG_CAGrad(WeightMethod):
         -------
         """
         # NOTE: we allow only shared params for now. Need to see paper for other options.
+        if shared_parameters is None:
+            raise ValueError("shared_parameters cannot be None")
         grad_dims = []
         for param in shared_parameters:
             grad_dims.append(param.data.numel())
@@ -1179,17 +1232,17 @@ class LOG_CAGrad(WeightMethod):
     def backward(
             self,
             losses: torch.Tensor,
-            parameters: Union[List[torch.nn.parameter.Parameter], torch.Tensor] = None,
-            shared_parameters: Union[
+            parameters: Optional[Union[List[torch.nn.parameter.Parameter], torch.Tensor]] = None,
+            shared_parameters: Optional[Union[
                 List[torch.nn.parameter.Parameter], torch.Tensor
-            ] = None,
-            task_specific_parameters: Union[
+            ]] = None,
+            task_specific_parameters: Optional[Union[
                 List[torch.nn.parameter.Parameter], torch.Tensor
-            ] = None,
+            ]] = None,
             **kwargs,
     ):
         GTG, w = self.get_weighted_loss(losses, shared_parameters)
-        if self.max_norm > 0:
+        if self.max_norm > 0 and shared_parameters is not None:
             torch.nn.utils.clip_grad_norm_(shared_parameters, self.max_norm)
         return None, {"GTG": GTG, "weights": w}  # NOTE: to align with all other weight methods
 
@@ -1217,9 +1270,11 @@ class IMTLG(WeightMethod):
     def get_weighted_loss(
             self,
             losses,
-            shared_parameters,
+            shared_parameters=None,
             **kwargs,
     ):
+        if shared_parameters is None:
+            raise ValueError("shared_parameters cannot be None")
         grads = {}
         norm_grads = {}
 
@@ -1294,9 +1349,11 @@ class LOG_IMTLG(WeightMethod):
     def get_weighted_loss(
             self,
             losses,
-            shared_parameters,
+            shared_parameters=None,
             **kwargs,
     ):
+        if shared_parameters is None:
+            raise ValueError("shared_parameters cannot be None for LOG_IMTLG")
         grads = {}
         norm_grads = {}
 
