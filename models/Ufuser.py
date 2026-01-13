@@ -3,7 +3,6 @@ import torch.nn as nn
 import numpy as np
 import torch.nn.functional as F
 from einops import rearrange
-import numbers
 
 
 class Restormer_CNN_block(nn.Module):
@@ -43,7 +42,7 @@ class GlobalFeatureExtraction(nn.Module):
         self,
         dim,
         num_heads,
-        ffn_expansion_factor=1.0,
+        ffn_expansion_factor=1,
         qkv_bias=False,
     ):
         super(GlobalFeatureExtraction, self).__init__()
@@ -198,7 +197,7 @@ def to_4d(x, h, w):
 class BiasFree_LayerNorm(nn.Module):
     def __init__(self, normalized_shape):
         super(BiasFree_LayerNorm, self).__init__()
-        if isinstance(normalized_shape, numbers.Integral):
+        if isinstance(normalized_shape, int):
             normalized_shape = (normalized_shape,)
         normalized_shape = torch.Size(normalized_shape)
 
@@ -215,7 +214,7 @@ class BiasFree_LayerNorm(nn.Module):
 class WithBias_LayerNorm(nn.Module):
     def __init__(self, normalized_shape):
         super(WithBias_LayerNorm, self).__init__()
-        if isinstance(normalized_shape, numbers.Integral):
+        if isinstance(normalized_shape, int):
             normalized_shape = (normalized_shape,)
         normalized_shape = torch.Size(normalized_shape)
 
@@ -381,8 +380,11 @@ class Ufuser(nn.Module):
 
 
 if __name__ == "__main__":
+    import os
+    os.environ["CUDA_VISIBLE_DEVICES"] = "3"
     model = Ufuser().cuda()
     i = torch.randn(1, 1, 128, 128).cuda()
     v = torch.randn(1, 1, 128, 128).cuda()
     out = model(i, v)
     print(out.shape)
+    print(model)
