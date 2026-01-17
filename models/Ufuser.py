@@ -383,8 +383,9 @@ if __name__ == "__main__":
     import os
     os.environ["CUDA_VISIBLE_DEVICES"] = "3"
     model = Ufuser().cuda()
-    i = torch.randn(1, 1, 128, 128).cuda()
-    v = torch.randn(1, 1, 128, 128).cuda()
+    i = torch.randn(1, 1, 480, 640).cuda()
+    v = torch.randn(1, 1, 480, 640).cuda()
     out = model(i, v)
     print(out.shape)
-    print(model)
+    print(out.max(), out.min())
+    # print(model)

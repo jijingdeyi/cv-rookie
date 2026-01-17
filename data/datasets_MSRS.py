@@ -1,6 +1,7 @@
 import glob
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader
+import torch
 from natsort import natsorted
 import numpy as np
 import random
@@ -11,8 +12,14 @@ from albumentations.pytorch import ToTensorV2
 TRAIN_PATH = "/data/ykx/MSRS/train"
 TEST_PATH = "/data/ykx/MSRS/test"
 
-VAL_RATIO = 0.02
+VAL_RATIO = 0.03  
 RANDOM_SEED = 42  
+NUM_WORKERS = 4
+def seed_worker(worker_id):
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+
 
 
 class Hinet_Dataset(Dataset):
@@ -68,7 +75,7 @@ train_transform = A.Compose(
     [
         A.HorizontalFlip(p=0.5),
         A.VerticalFlip(p=0.5),
-        A.RandomCrop(height=256, width=256),
+        A.RandomCrop(height=480, width=480),
         ToTensorV2(),  # 同时作用到 image 和 additional_targets
     ],
     additional_targets={
@@ -136,12 +143,17 @@ def get_train_val_datasets():
 # 训练模式：从训练集中划分训练集和验证集
 train_dataset, val_dataset = get_train_val_datasets()
 
+g = torch.Generator()
+g.manual_seed(RANDOM_SEED)
+
 trainloader = DataLoader(
     train_dataset,
     batch_size=4,
     shuffle=True,
     pin_memory=True,
-    num_workers=4,
+    num_workers=NUM_WORKERS,
+    worker_init_fn=seed_worker,
+    generator=g,
     drop_last=True,
 )
 
@@ -150,7 +162,9 @@ valloader = DataLoader(
     batch_size=1,
     shuffle=False,
     pin_memory=True,
-    num_workers=4,
+    num_workers=NUM_WORKERS,
+    worker_init_fn=seed_worker,
+    generator=g,
     drop_last=False,
 )
 
@@ -160,7 +174,9 @@ testloader = DataLoader(
     batch_size=1,
     shuffle=False,
     pin_memory=True,
-    num_workers=4,
+    num_workers=NUM_WORKERS,
+    worker_init_fn=seed_worker,
+    generator=g,
     drop_last=False,
 )
 
