@@ -67,8 +67,7 @@ def evaluation_one(ir_name, vi_name, f_name):
     vi_img_double = np.array(vi_img).astype(np.float32)
 
     EN = EN_function(f_img_int)
-    MI = MI_function(ir_img_int, vi_img_int, f_img_int, gray_level=256)
-
+    MI = MI_function(ir_img_int, vi_img_int, f_img_int, gray_level=256, use_nats=True)
     SF = SF_function(f_img_double)
     SD = SD_function(f_img_double)
     AG = AG_function(f_img_double)
@@ -86,18 +85,18 @@ def evaluation_one(ir_name, vi_name, f_name):
 
 if __name__ == "__main__":
     with_mean = True
-    results_root = os.path.join("/data/ykx/", "result/ablation")
+    
     ir_dir = os.path.join("/data/ykx/MSRS/test", "ir")
     vi_dir = os.path.join("/data/ykx/MSRS/test", "vi")
-    f_dir = os.path.join(results_root)
-    save_dir = os.path.join("/home/ykx/ReCoNet/result/metric")
+    f_dir = os.path.join('/data/ykx/sota/MSRS')
+    save_dir = os.path.join("/data/ykx/metric")
     os.makedirs(save_dir, exist_ok=True)
 
-    metric_save_name = os.path.join(save_dir, "ablation.xlsx")
+    metric_save_name = os.path.join(save_dir, "MSRS.xlsx")
     # filelist = natsorted(os.listdir(ir_dir))
     filelist = os.listdir(ir_dir)
 
-    Method_list = ["one_scale", "weight", "pad", "ours"]
+    Method_list = [name for name in os.listdir(f_dir) if os.path.isdir(os.path.join(f_dir, name))]
 
     for i, Method in enumerate(Method_list):
         EN_list, MI_list, SF_list, AG_list, SD_list = [], [], [], [], []
@@ -114,8 +113,6 @@ if __name__ == "__main__":
             ir_name = os.path.join(ir_dir, item)
             vi_name = os.path.join(vi_dir, item)
             f_name = os.path.join(sub_f_dir, item)
-            # 如需调试可打开：
-            # print(ir_name, vi_name, f_name)
             EN, MI, SF, AG, SD, CC, SCD, VIF, MSE, PSNR, Qabf, Nabf, SSIM, MS_SSIM = (
                 evaluation_one(ir_name, vi_name, f_name)
             )
@@ -136,20 +133,14 @@ if __name__ == "__main__":
             filename_list.append(item)
 
         if with_mean:
-            # —— 用“原始样本”计算均值与标准差，避免被后续 append 的统计量污染 ——
             EN_raw, MI_raw, SF_raw, AG_raw, SD_raw = (
-                EN_list[:],
-                MI_list[:],
-                SF_list[:],
-                AG_list[:],
-                SD_list[:],
+                EN_list[:], MI_list[:], SF_list[:], AG_list[:], SD_list[:],
             )
             CC_raw, SCD_raw, VIF_raw = CC_list[:], SCD_list[:], VIF_list[:]
             MSE_raw, PSNR_raw = MSE_list[:], PSNR_list[:]
             Qabf_raw, Nabf_raw = Qabf_list[:], Nabf_list[:]
             SSIM_raw, MS_SSIM_raw = SSIM_list[:], MS_SSIM_list[:]
 
-            # 均值
             EN_list.append(np.mean(EN_raw))
             MI_list.append(np.mean(MI_raw))
             SF_list.append(np.mean(SF_raw))
@@ -166,7 +157,6 @@ if __name__ == "__main__":
             MS_SSIM_list.append(np.mean(MS_SSIM_raw))
             filename_list.append("mean")
 
-            # 标准差（统一用“原始样本”）
             EN_list.append(np.std(EN_raw))
             MI_list.append(np.std(MI_raw))
             SF_list.append(np.std(SF_raw))
@@ -183,7 +173,6 @@ if __name__ == "__main__":
             MS_SSIM_list.append(np.std(MS_SSIM_raw))
             filename_list.append("std")
 
-        # 保留三位小数
         def round3(lst):
             return [round(x, 3) for x in lst]
 
@@ -202,7 +191,6 @@ if __name__ == "__main__":
         SSIM_list = round3(SSIM_list)
         MS_SSIM_list = round3(MS_SSIM_list)
 
-        # 在每列顶部插入方法名，和你的原逻辑保持一致
         EN_list.insert(0, f"{Method}")
         MI_list.insert(0, f"{Method}")
         SF_list.insert(0, f"{Method}")
@@ -218,7 +206,6 @@ if __name__ == "__main__":
         SSIM_list.insert(0, f"{Method}")
         MS_SSIM_list.insert(0, f"{Method}")
 
-        # 第一次循环把文件名列写进去，后面方法只写各自列
         if i == 0:
             write_excel(metric_save_name, "EN", 0, filename_list)
             write_excel(metric_save_name, "MI", 0, filename_list)
