@@ -11,6 +11,61 @@ from openpyxl.utils import get_column_letter
 warnings.filterwarnings("ignore")
 
 
+def get_existing_method_to_col(excel_name: str, worksheet_name: str = "EN") -> dict:
+    """
+    读取已存在的 Excel，返回 {method_name: column_index}（0-based）。
+    约定：第 0 列是文件名；第 1 行（row=1）每个方法列的第一个单元格存 method_name。
+    """
+    if not os.path.exists(excel_name):
+        return {}
+
+    try:
+        wb = load_workbook(excel_name, read_only=True, data_only=True)
+    except Exception:
+        return {}
+
+    if worksheet_name not in wb.sheetnames:
+        return {}
+
+    ws = wb[worksheet_name]
+    mapping = {}
+    # 方法列从第 2 列开始（B 列），A 列是文件名
+    col = 2
+    while True:
+        v = ws.cell(row=1, column=col).value
+        if v is None or str(v).strip() == "":
+            break
+        method = str(v).strip()
+        mapping[method] = col - 1  # 转成 0-based column_index
+        col += 1
+    return mapping
+
+
+def ensure_filename_column(excel_name: str, filename_list: list, sheet_names: list):
+    """
+    确保每个 metric sheet 的第 0 列写入 filename_list（A 列）。
+    只在 A1 为空/不存在时写，避免覆盖已有表头。
+    """
+    try:
+        wb = load_workbook(excel_name) if os.path.exists(excel_name) else Workbook()
+        if wb.active and wb.active.title == "Sheet" and len(wb.sheetnames) == 1:
+            # 新建默认空表，先保留，后面会在 write_excel 里清理
+            pass
+    except FileNotFoundError:
+        wb = Workbook()
+
+    for sn in sheet_names:
+        ws = wb[sn] if sn in wb.sheetnames else wb.create_sheet(title=sn)
+        if ws.cell(row=1, column=1).value in (None, ""):
+            col_letter = get_column_letter(1)
+            for i, value in enumerate(filename_list, start=1):
+                ws[f"{col_letter}{i}"].value = value
+
+    if "Sheet" in wb.sheetnames and len(wb.sheetnames) > 1:
+        wb.remove(wb["Sheet"])
+    wb.save(excel_name)
+
+
 def write_excel(
     excel_name="metric.xlsx", worksheet_name="VIF", column_index=0, data=None
 ):
@@ -98,13 +153,48 @@ if __name__ == "__main__":
 
     Method_list = [name for name in os.listdir(f_dir) if os.path.isdir(os.path.join(f_dir, name))]
 
-    for i, Method in enumerate(Method_list):
+    metric_sheets = [
+        "EN",
+        "MI",
+        "SF",
+        "AG",
+        "SD",
+        "CC",
+        "SCD",
+        "VIF",
+        "MSE",
+        "PSNR",
+        "Qabf",
+        "Nabf",
+        "SSIM",
+        "MS_SSIM",
+    ]
+
+    # 先根据已有 Excel（默认用 EN sheet）识别已经算过的方法列，避免重算
+    existing_method_to_col = get_existing_method_to_col(metric_save_name, worksheet_name="EN")
+    existing_methods = set(existing_method_to_col.keys())
+    methods_to_run = [m for m in Method_list if m not in existing_methods]
+
+    if len(methods_to_run) == 0:
+        print(f"[metric] {metric_save_name} 已包含全部 {len(Method_list)} 个方法，无需重算。")
+        raise SystemExit(0)
+
+    # filename 列需要包含 mean/std 行（如果 with_mean=True）
+    filename_list = [""] + filelist[:]
+    if with_mean:
+        filename_list += ["mean", "std"]
+
+    # 确保所有 sheet 的第 0 列（文件名列）存在
+    ensure_filename_column(metric_save_name, filename_list, metric_sheets)
+
+    next_col = (max(existing_method_to_col.values()) + 1) if existing_method_to_col else 1
+
+    for offset, Method in enumerate(methods_to_run):
         EN_list, MI_list, SF_list, AG_list, SD_list = [], [], [], [], []
         CC_list, SCD_list, VIF_list = [], [], []
         MSE_list, PSNR_list = [], []
         Qabf_list, Nabf_list = [], []
         SSIM_list, MS_SSIM_list = [], []
-        filename_list = [""]  # 第一行预留空位与“方法名”列对齐
 
         sub_f_dir = os.path.join(f_dir, Method)
         eval_bar = tqdm(filelist, desc=f"{Method}")
@@ -171,7 +261,6 @@ if __name__ == "__main__":
             Nabf_list.append(np.std(Nabf_raw))
             SSIM_list.append(np.std(SSIM_raw))
             MS_SSIM_list.append(np.std(MS_SSIM_raw))
-            filename_list.append("std")
 
         def round3(lst):
             return [round(x, 3) for x in lst]
@@ -206,33 +295,18 @@ if __name__ == "__main__":
         SSIM_list.insert(0, f"{Method}")
         MS_SSIM_list.insert(0, f"{Method}")
 
-        if i == 0:
-            write_excel(metric_save_name, "EN", 0, filename_list)
-            write_excel(metric_save_name, "MI", 0, filename_list)
-            write_excel(metric_save_name, "SF", 0, filename_list)
-            write_excel(metric_save_name, "AG", 0, filename_list)
-            write_excel(metric_save_name, "SD", 0, filename_list)
-            write_excel(metric_save_name, "CC", 0, filename_list)
-            write_excel(metric_save_name, "SCD", 0, filename_list)
-            write_excel(metric_save_name, "VIF", 0, filename_list)
-            write_excel(metric_save_name, "MSE", 0, filename_list)
-            write_excel(metric_save_name, "PSNR", 0, filename_list)
-            write_excel(metric_save_name, "Qabf", 0, filename_list)
-            write_excel(metric_save_name, "Nabf", 0, filename_list)
-            write_excel(metric_save_name, "SSIM", 0, filename_list)
-            write_excel(metric_save_name, "MS_SSIM", 0, filename_list)
-
-        write_excel(metric_save_name, "EN", i + 1, EN_list)
-        write_excel(metric_save_name, "MI", i + 1, MI_list)
-        write_excel(metric_save_name, "SF", i + 1, SF_list)
-        write_excel(metric_save_name, "AG", i + 1, AG_list)
-        write_excel(metric_save_name, "SD", i + 1, SD_list)
-        write_excel(metric_save_name, "CC", i + 1, CC_list)
-        write_excel(metric_save_name, "SCD", i + 1, SCD_list)
-        write_excel(metric_save_name, "VIF", i + 1, VIF_list)
-        write_excel(metric_save_name, "MSE", i + 1, MSE_list)
-        write_excel(metric_save_name, "PSNR", i + 1, PSNR_list)
-        write_excel(metric_save_name, "Qabf", i + 1, Qabf_list)
-        write_excel(metric_save_name, "Nabf", i + 1, Nabf_list)
-        write_excel(metric_save_name, "SSIM", i + 1, SSIM_list)
-        write_excel(metric_save_name, "MS_SSIM", i + 1, MS_SSIM_list)
+        col_index = next_col + offset
+        write_excel(metric_save_name, "EN", col_index, EN_list)
+        write_excel(metric_save_name, "MI", col_index, MI_list)
+        write_excel(metric_save_name, "SF", col_index, SF_list)
+        write_excel(metric_save_name, "AG", col_index, AG_list)
+        write_excel(metric_save_name, "SD", col_index, SD_list)
+        write_excel(metric_save_name, "CC", col_index, CC_list)
+        write_excel(metric_save_name, "SCD", col_index, SCD_list)
+        write_excel(metric_save_name, "VIF", col_index, VIF_list)
+        write_excel(metric_save_name, "MSE", col_index, MSE_list)
+        write_excel(metric_save_name, "PSNR", col_index, PSNR_list)
+        write_excel(metric_save_name, "Qabf", col_index, Qabf_list)
+        write_excel(metric_save_name, "Nabf", col_index, Nabf_list)
+        write_excel(metric_save_name, "SSIM", col_index, SSIM_list)
+        write_excel(metric_save_name, "MS_SSIM", col_index, MS_SSIM_list)
