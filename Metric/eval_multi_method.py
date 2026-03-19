@@ -141,13 +141,13 @@ def evaluation_one(ir_name, vi_name, f_name):
 if __name__ == "__main__":
     with_mean = True
     
-    ir_dir = os.path.join("/data/ykx/MSRS/test", "ir")
-    vi_dir = os.path.join("/data/ykx/MSRS/test", "vi")
-    f_dir = os.path.join('/data/ykx/sota/MSRS')
+    ir_dir = os.path.join("/data/ykx/FMB/test", "ir")
+    vi_dir = os.path.join("/data/ykx/FMB/test", "vi")
+    f_dir = os.path.join('/data/ykx/sota/FMB')
     save_dir = os.path.join("/data/ykx/metric")
     os.makedirs(save_dir, exist_ok=True)
 
-    metric_save_name = os.path.join(save_dir, "MSRS.xlsx")
+    metric_save_name = os.path.join(save_dir, "FMB.xlsx")
     # filelist = natsorted(os.listdir(ir_dir))
     filelist = os.listdir(ir_dir)
 
@@ -189,14 +189,30 @@ if __name__ == "__main__":
 
     next_col = (max(existing_method_to_col.values()) + 1) if existing_method_to_col else 1
 
+    skipped_methods = []
+
     for offset, Method in enumerate(methods_to_run):
+        sub_f_dir = os.path.join(f_dir, Method)
+
+        # 预检：用第一张图检查融合结果的尺寸是否与源图一致
+        first_ir = Image.open(os.path.join(ir_dir, filelist[0]))
+        first_f_path = os.path.join(sub_f_dir, filelist[0])
+        if not os.path.exists(first_f_path):
+            print(f"[skip] {Method}: 融合结果缺失（{first_f_path} 不存在），跳过")
+            skipped_methods.append(Method)
+            continue
+        first_f = Image.open(first_f_path)
+        if first_f.size != first_ir.size:
+            print(f"[skip] {Method}: 融合图尺寸 {first_f.size} 与源图尺寸 {first_ir.size} 不一致，跳过")
+            skipped_methods.append(Method)
+            continue
+
         EN_list, MI_list, SF_list, AG_list, SD_list = [], [], [], [], []
         CC_list, SCD_list, VIF_list = [], [], []
         MSE_list, PSNR_list = [], []
         Qabf_list, Nabf_list = [], []
         SSIM_list, MS_SSIM_list = [], []
 
-        sub_f_dir = os.path.join(f_dir, Method)
         eval_bar = tqdm(filelist, desc=f"{Method}")
 
         for _, item in enumerate(eval_bar):
@@ -295,7 +311,7 @@ if __name__ == "__main__":
         SSIM_list.insert(0, f"{Method}")
         MS_SSIM_list.insert(0, f"{Method}")
 
-        col_index = next_col + offset
+        col_index = next_col + offset - len(skipped_methods)
         write_excel(metric_save_name, "EN", col_index, EN_list)
         write_excel(metric_save_name, "MI", col_index, MI_list)
         write_excel(metric_save_name, "SF", col_index, SF_list)
