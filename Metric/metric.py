@@ -8,6 +8,15 @@ import torch
 from pytorch_msssim import ssim, ms_ssim
 
 
+def _to_4d_float_tensor(x: np.ndarray) -> torch.Tensor:
+    """
+    将 HxW numpy 数组转为 1x1xHxW float32 tensor。
+    优先使用 as_tensor 以减少不必要拷贝。
+    """
+    arr = np.asarray(x, dtype=np.float32)
+    return torch.as_tensor(arr).unsqueeze(0).unsqueeze(0)
+
+
 def EN_function(image_array):
     # 计算图像的直方图
     histogram, bins = np.histogram(image_array, bins=256, range=(0, 255))
@@ -216,9 +225,9 @@ def SSIM_function(A, B, F):
     Returns:
         SSIM 值 (float)
     """
-    A_t = torch.tensor(A, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
-    B_t = torch.tensor(B, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
-    F_t = torch.tensor(F, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+    A_t = _to_4d_float_tensor(A)
+    B_t = _to_4d_float_tensor(B)
+    F_t = _to_4d_float_tensor(F)
 
     ssim_A = ssim(A_t, F_t, data_range=255.0)
     ssim_B = ssim(B_t, F_t, data_range=255.0)
@@ -237,9 +246,9 @@ def MS_SSIM_function(A, B, F):
     Returns:
         MS-SSIM 值 (float)
     """
-    A_t = torch.tensor(A, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
-    B_t = torch.tensor(B, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
-    F_t = torch.tensor(F, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+    A_t = _to_4d_float_tensor(A)
+    B_t = _to_4d_float_tensor(B)
+    F_t = _to_4d_float_tensor(F)
 
     ms_ssim_A = ms_ssim(A_t, F_t, data_range=255.0)
     ms_ssim_B = ms_ssim(B_t, F_t, data_range=255.0)
