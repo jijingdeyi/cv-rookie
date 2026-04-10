@@ -141,13 +141,13 @@ def evaluation_one(ir_name, vi_name, f_name):
 if __name__ == "__main__":
     with_mean = True
     
-    ir_dir = os.path.join("/data/ykx/FMB/test", "ir")
-    vi_dir = os.path.join("/data/ykx/FMB/test", "vi")
-    f_dir = os.path.join('/data/ykx/sota/FMB')
+    ir_dir = os.path.join("/data/ykx/RoadScene/test", "ir")
+    vi_dir = os.path.join("/data/ykx/RoadScene/test", "vi")
+    f_dir = os.path.join('/data/ykx/sota/RoadScene')
     save_dir = os.path.join("/data/ykx/metric")
     os.makedirs(save_dir, exist_ok=True)
 
-    metric_save_name = os.path.join(save_dir, "FMB.xlsx")
+    metric_save_name = os.path.join(save_dir, "RoadScene.xlsx")
     # filelist = natsorted(os.listdir(ir_dir))
     filelist = os.listdir(ir_dir)
 

@@ -9,18 +9,24 @@ def imread_any(p: Path):
     arr = np.fromfile(str(p), dtype=np.uint8)
     return cv2.imdecode(arr, cv2.IMREAD_COLOR)
 
-def draw_label(img, text, font_scale=0.6, pad=6):
+def draw_label(img, text, font_scale=0.6, pad=6, label_scale_mult=1.25, label_color=(0, 255, 255)):
     h, w = img.shape[:2]
     overlay = img.copy()
-    bar_h = int(28 * font_scale + 2*pad)
+    label_scale = font_scale * label_scale_mult
+    bar_h = int(32 * label_scale + 2*pad)
     cv2.rectangle(overlay, (0,0), (w, bar_h), (0,0,0), -1)
     img = cv2.addWeighted(overlay, 0.35, img, 0.65, 0)
-    thickness = max(1, int(1.2 * font_scale))
-    cv2.putText(img, text, (pad, pad + int(20*font_scale)), cv2.FONT_HERSHEY_SIMPLEX,
-                font_scale, (255,255,255), thickness, cv2.LINE_AA)
+    thickness = max(2, int(2.2 * label_scale))
+    x = pad
+    y = pad + int(24 * label_scale)
+    # 黑色描边 + 黄色主文字，提高可读性
+    cv2.putText(img, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX,
+                label_scale, (0, 0, 0), thickness + 2, cv2.LINE_AA)
+    cv2.putText(img, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX,
+                label_scale, label_color, thickness, cv2.LINE_AA)
     return img
 
-def tile_images(images, labels, cols=0, pad=8, bg=18, sep=2, font_scale=0.6):
+def tile_images(images, labels, cols=0, pad=8, bg=18, sep=2, font_scale=0.6, label_scale_mult=1.25, label_color=(0, 255, 255)):
     valid = [im for im in images if im is not None]
     if not valid: return None
     th, tw = valid[0].shape[:2]
@@ -28,12 +34,15 @@ def tile_images(images, labels, cols=0, pad=8, bg=18, sep=2, font_scale=0.6):
     for im in images:
         if im is None:
             im = np.full((th, tw, 3), 64, np.uint8)
-            im = draw_label(im, "MISSING", font_scale)
+            im = draw_label(im, "MISSING", font_scale, label_scale_mult=label_scale_mult, label_color=label_color)
         else:
             if im.shape[:2] != (th, tw):
                 im = cv2.resize(im, (tw, th), interpolation=cv2.INTER_AREA)
         normed.append(im)
-    normed = [draw_label(im, lbl, font_scale, pad//2) for im, lbl in zip(normed, labels)]
+    normed = [
+        draw_label(im, lbl, font_scale, pad//2, label_scale_mult=label_scale_mult, label_color=label_color)
+        for im, lbl in zip(normed, labels)
+    ]
     n = len(normed)
     if cols <= 0 or cols >= n: rows, cols = 1, n
     else: rows = math.ceil(n / cols)
@@ -65,6 +74,43 @@ def parse_ref(arg: str):
         print(f"[Error] 参考目录不存在: {p}", file=sys.stderr)
         sys.exit(1)
     return name, p
+
+def parse_label_dir_arg(arg: str, arg_name: str):
+    if ":" not in arg:
+        print(f"[Error] {arg_name} 需要 '标签:目录' 形式，例如 ours:/path/to/dir", file=sys.stderr)
+        sys.exit(1)
+    name, path = arg.split(":", 1)
+    name = name.strip(); path = path.strip()
+    p = Path(path)
+    if not p.is_dir():
+        print(f"[Error] {arg_name} 目录不存在: {p}", file=sys.stderr)
+        sys.exit(1)
+    return name, p
+
+def parse_label_color_arg(arg: str):
+    presets = {
+        "yellow": (0, 255, 255),
+        "white": (255, 255, 255),
+        "red": (0, 0, 255),
+        "green": (0, 255, 0),
+        "blue": (255, 0, 0),
+        "cyan": (255, 255, 0),
+        "magenta": (255, 0, 255),
+        "black": (0, 0, 0),
+    }
+    s = str(arg).strip().lower()
+    if s in presets:
+        return presets[s]
+    parts = [x.strip() for x in str(arg).split(",")]
+    if len(parts) == 3:
+        try:
+            r, g, b = [int(x) for x in parts]
+            if all(0 <= v <= 255 for v in (r, g, b)):
+                return (b, g, r)  # OpenCV 使用 BGR
+        except ValueError:
+            pass
+    print(f"[Error] --label-color 无效: {arg}。可用颜色名如 yellow，或 R,G,B（如 255,255,0）", file=sys.stderr)
+    sys.exit(1)
 
 def build_stem_index(dir_path: Path, exts_priority):
     """
@@ -103,24 +149,35 @@ def build_stem_index(dir_path: Path, exts_priority):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--root", type=str, required=True,
+    ap.add_argument("--root", type=str, default="/data/ykx/sota/MSRS",
                     help="方法结果根目录（包含各方法子目录）")
-    ap.add_argument("--methods", nargs="*", default=None,
+    ap.add_argument("--methods", nargs="*", default=['didfuse', 'rfnnest', 'mfeif', 'sdnet', 'piafusion', 'reconet', 'swinfusion', 'tardal', 'cddfuse', 'lrrnet', 'metafusion', 'segmif', 'emma', 'sage', 'gifnet'],
                     help="方法子目录显示顺序；留空=自动发现并按字母序")
-    ap.add_argument("--ref", action="append", default=[],
+    ap.add_argument("--my-method", type=str, default='ours:/home/ykx/ca-fusion-loss/results/MSRS/ours',
+                    help="追加到最后一列的方法，格式 '标签:目录'，例如 --my-method 'ours:/data/ykx/sota/MSRS/ours'")
+    ap.add_argument("--ref", action="append", default=['IR:/data/ykx/MSRS/test/ir', 'VIS:/data/ykx/MSRS/test/vi'],
                     help="新增参考列：格式 '标签:目录'，可重复两次，例如 "
                          "--ref 'IR:/data/IR' --ref 'VIS:/data/VIS'")
     ap.add_argument("--exts", nargs="*", default=[".png",".jpg",".jpeg",".bmp"],
                     help="允许的扩展名（含优先级，前者优先）；大小写不敏感")
-    ap.add_argument("--out-dir", type=str, default="export")
-    ap.add_argument("--cols", type=int, default=0)
+    ap.add_argument("--out-dir", type=str, default="output")
+    ap.add_argument("--cols", type=int, default=5)
     ap.add_argument("--font-scale", type=float, default=0.6)
     ap.add_argument("--pad", type=int, default=8)
     ap.add_argument("--sep", type=int, default=2)
     ap.add_argument("--bg-gray", type=int, default=18)
+    ap.add_argument("--label-scale", type=float, default=2.,
+                    help="方法名标签字号倍率（基于 --font-scale），默认 1.25")
+    ap.add_argument("--label-color", type=str, default="yellow",
+                    help="方法名标签颜色：颜色名（yellow/white/red/green/blue/cyan/magenta/black）或 R,G,B")
+    ap.add_argument("--only-stems", nargs="*", default=['00734N'],
+                    help="仅导出指定 stem（不含扩展名）")
     ap.add_argument("--strict-intersection", action="store_true",
                     help="开启后仅导出在所有列（参考+方法）都存在的 stem；关闭则按并集并对缺图用 MISSING")
     args = ap.parse_args()
+    if args.label_scale <= 0:
+        print("[Error] --label-scale 必须 > 0", file=sys.stderr); sys.exit(1)
+    label_color = parse_label_color_arg(args.label_color)
 
     root = Path(args.root)
     if not root.is_dir():
@@ -155,6 +212,14 @@ def main():
         col_stems.append(stems)
         col_best_path.append(best)
 
+    # 追加“我的方法”到最后一列（若提供）
+    if args.my_method:
+        my_label, my_dir = parse_label_dir_arg(args.my_method, "--my-method")
+        stems, best = build_stem_index(my_dir, args.exts)
+        col_labels.append(my_label)
+        col_stems.append(stems)
+        col_best_path.append(best)
+
     # 聚合所有 stem（交集或并集）
     if not col_stems:
         print("[Error] 没有可用列", file=sys.stderr); sys.exit(1)
@@ -162,6 +227,9 @@ def main():
         names = sorted(set.intersection(*col_stems))
     else:
         names = sorted(set.union(*col_stems))
+    if args.only_stems:
+        wanted = {s.strip() for s in args.only_stems if s.strip()}
+        names = [n for n in names if n in wanted]
     if not names:
         print("[Error] 没有匹配的文件主干（stem）。请检查命名。", file=sys.stderr); sys.exit(1)
 
@@ -179,7 +247,8 @@ def main():
             ims.append(im); labels.append(lbl)
 
         panel = tile_images(ims, labels, cols=args.cols, pad=args.pad,
-                            bg=args.bg_gray, sep=args.sep, font_scale=args.font_scale)
+                            bg=args.bg_gray, sep=args.sep, font_scale=args.font_scale,
+                            label_scale_mult=args.label_scale, label_color=label_color)
         if panel is None:
             # 所有列都缺就跳过
             continue
