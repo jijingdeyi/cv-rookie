@@ -373,7 +373,7 @@ httpd.serve_forever()
         return url, False, port
     return url, True, port
 
-def apply_zoom_inset(img, roi, inset_pos="br", inset_size=180, border=2, color=(0, 255, 255)):
+def apply_zoom_inset(img, roi, inset_pos="br", border=2, color=(0, 255, 255), zoom_factor=2.5):
     if roi is None or img is None:
         return img
     h, w = img.shape[:2]
@@ -392,18 +392,20 @@ def apply_zoom_inset(img, roi, inset_pos="br", inset_size=180, border=2, color=(
     cv2.rectangle(out, (x, y), (x + rw, y + rh), color, max(1, border), cv2.LINE_AA)
 
     crop = out[y:y + rh, x:x + rw]
-    max_side = int(max(40, min(inset_size, int(0.45 * min(h, w)))))
-    if max_side <= 0:
-        return out
-    if rw >= rh:
-        iw = max_side
-        ih = max(24, int(round(max_side * rh / max(1, rw))))
-    else:
-        ih = max_side
-        iw = max(24, int(round(max_side * rw / max(1, rh))))
-
-    inset = cv2.resize(crop, (iw, ih), interpolation=cv2.INTER_CUBIC)
+    iw = max(24, int(round(rw * float(zoom_factor))))
+    ih = max(24, int(round(rh * float(zoom_factor))))
     margin = max(6, border + 3)
+    # 最终确保放大窗能放进图内
+    max_iw = max(24, w - 2 * margin)
+    max_ih = max(24, h - 2 * margin)
+    if iw > max_iw or ih > max_ih:
+        s = min(max_iw / float(max(1, iw)), max_ih / float(max(1, ih)))
+        iw = max(24, int(round(iw * s)))
+        ih = max(24, int(round(ih * s)))
+    iw = min(iw, w)
+    ih = min(ih, h)
+    inset = cv2.resize(crop, (iw, ih), interpolation=cv2.INTER_CUBIC)
+
     if inset_pos == "tl":
         ix, iy = margin, margin
     elif inset_pos == "tr":
@@ -448,7 +450,7 @@ def apply_zoom_inset(img, roi, inset_pos="br", inset_size=180, border=2, color=(
     return out
 
 def tile_images(images, labels, cols=0, pad=8, bg=18, sep=2, font_scale=0.6, label_scale_mult=1.25, label_color=(0, 255, 255),
-                ref_short_side=512.0, zoom_roi=None, zoom_pos="br", zoom_inset_size=180, zoom_border=2):
+                ref_short_side=512.0, zoom_roi=None, zoom_pos="br", zoom_border=2, zoom_factor=2.5):
     valid = [im for im in images if im is not None]
     if not valid: return None
     th, tw = valid[0].shape[:2]
@@ -462,8 +464,8 @@ def tile_images(images, labels, cols=0, pad=8, bg=18, sep=2, font_scale=0.6, lab
             if im.shape[:2] != (th, tw):
                 im = cv2.resize(im, (tw, th), interpolation=cv2.INTER_AREA)
             if zoom_roi is not None:
-                im = apply_zoom_inset(im, zoom_roi, inset_pos=zoom_pos, inset_size=zoom_inset_size,
-                                      border=zoom_border, color=label_color)
+                im = apply_zoom_inset(im, zoom_roi, inset_pos=zoom_pos,
+                                      border=zoom_border, color=label_color, zoom_factor=zoom_factor)
         normed.append(im)
     normed = [
         draw_label(im, lbl, font_scale, pad//2, label_scale_mult=label_scale_mult, label_color=label_color,
@@ -601,7 +603,7 @@ def main():
                     help="方法名标签颜色：颜色名（yellow/white/red/green/blue/cyan/magenta/black）或 R,G,B")
     ap.add_argument("--stem-title-mult", type=float, default=1.0,
                     help="底部 stem 标题条（如 00123D [1/10]）高度与字号倍率，<1 更扁更小，例如 0.65")
-    ap.add_argument("--only-stems", nargs="*", default=['00111D'],
+    ap.add_argument("--only-stems", nargs="*", default=['00931N'],
                     help="仅导出指定 stem（不含扩展名）")
     ap.add_argument("--zoom-roi", type=str, default="",
                     help="局部放大 ROI，格式 x,y,w,h（像素），例如 120,80,64,64；留空=关闭放大")
@@ -617,27 +619,16 @@ def main():
                     help="ROI 配置文件路径（默认 out-dir/zoom_roi.json）")
     ap.add_argument("--ignore-zoom-roi-config", action="store_true",
                     help="忽略 ROI 配置文件，不自动读取")
-    ap.add_argument("--zoom-pos", type=str, default="br", choices=["tl", "tr", "bl", "br"],
+    ap.add_argument("--zoom-pos", type=str, default="bl", choices=["tl", "tr", "bl", "br"],
                     help="放大窗位置：tl/tr/bl/br")
-    ap.add_argument("--zoom-inset-size", type=int, default=180,
-                    help="放大窗最大边长（像素）")
+    ap.add_argument("--zoom-factor", type=float, default=2,
+                    help="固定放大倍数（>1 时放大更明显）")
     ap.add_argument("--zoom-border", type=int, default=2,
                     help="ROI 与放大窗边框粗细")
     ap.add_argument("--strict-intersection", action="store_true",
                     help="开启后仅导出在所有列（参考+方法）都存在的 stem；关闭则按并集并对缺图用 MISSING")
     args = ap.parse_args()
-    if args.label_scale <= 0:
-        print("[Error] --label-scale 必须 > 0", file=sys.stderr); sys.exit(1)
-    if args.label_ref_side <= 0:
-        print("[Error] --label-ref-side 必须 > 0", file=sys.stderr); sys.exit(1)
-    if args.stem_title_mult <= 0:
-        print("[Error] --stem-title-mult 必须 > 0", file=sys.stderr); sys.exit(1)
-    if args.zoom_inset_size <= 0:
-        print("[Error] --zoom-inset-size 必须 > 0", file=sys.stderr); sys.exit(1)
-    if args.zoom_border <= 0:
-        print("[Error] --zoom-border 必须 > 0", file=sys.stderr); sys.exit(1)
-    if args.web_port <= 0 or args.web_port > 65535:
-        print("[Error] --web-port 必须在 1-65535", file=sys.stderr); sys.exit(1)
+
     label_color = parse_label_color_arg(args.label_color)
     zoom_roi = parse_zoom_roi(args.zoom_roi)
     out = Path(args.out_dir)
@@ -756,8 +747,8 @@ def main():
                             bg=args.bg_gray, sep=args.sep, font_scale=args.font_scale,
                             label_scale_mult=args.label_scale, label_color=label_color,
                             ref_short_side=args.label_ref_side, zoom_roi=zoom_roi,
-                            zoom_pos=args.zoom_pos, zoom_inset_size=args.zoom_inset_size,
-                            zoom_border=args.zoom_border)
+                            zoom_pos=args.zoom_pos,
+                            zoom_border=args.zoom_border, zoom_factor=args.zoom_factor)
         if panel is None:
             # 所有列都缺就跳过
             continue
