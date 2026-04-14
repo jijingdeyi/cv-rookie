@@ -5,6 +5,35 @@ import argparse, cv2, numpy as np, math, json, sys, os
 from collections import defaultdict
 import socket, subprocess, time
 
+# ================= 常用参数配置区（建议只改这里） =================
+# 说明：
+# 1) 这些值会作为 argparse 的默认值；命令行传参仍然会覆盖它们。
+# 2) 你常改的参数都集中在这里，避免在 main() 里到处翻。
+USER_COMMON_DEFAULTS = {
+    "root": "/data/ykx/sota/MSRS",
+    "methods": [
+        "didfuse", "rfnnest", "mfeif", "sdnet", "piafusion",
+        "reconet", "swinfusion", "tardal", "cddfuse", "lrrnet",
+        "metafusion", "segmif", "emma", "sage", "gifnet",
+    ],
+    "my_method": "ours:/home/ykx/ca-fusion-loss/results/MSRS/ours",
+    "ref": ["IR:/data/ykx/MSRS/test/ir", "VIS:/data/ykx/MSRS/test/vi"],
+    "cols": 5,
+    "only_stems": ["00931N"],
+    "zoom_pos": "br,tr",
+    "zoom_factors": "1.8,2",  # 例如: "1.8,3.2"
+}
+# ===============================================================
+
+ZOOM_COLOR_PALETTE = [
+    (0, 255, 255),   # yellow
+    (0, 255, 0),     # green
+    (255, 0, 255),   # magenta
+    (255, 255, 0),   # cyan
+    (0, 128, 255),   # orange-ish
+    (255, 128, 0),   # blue-ish
+]
+
 def imread_any(p: Path):
     # 兼容中文路径与非 ASCII：用 tofile/ fromfile + imdecode
     arr = np.fromfile(str(p), dtype=np.uint8)
@@ -52,6 +81,74 @@ def parse_zoom_roi(arg: str):
         print(f"[Error] --zoom-roi 中 w,h 必须 > 0: {arg}", file=sys.stderr)
         sys.exit(1)
     return x, y, w, h
+
+def parse_zoom_rois(arg: str):
+    s = str(arg).strip()
+    if not s:
+        return []
+    chunks = [c.strip() for c in s.split(";") if c.strip()]
+    rois = [parse_zoom_roi(c) for c in chunks]
+    return rois
+
+def parse_zoom_factors(arg: str):
+    s = str(arg).strip()
+    if not s:
+        return []
+    out = []
+    for p in [x.strip() for x in s.split(",") if x.strip()]:
+        try:
+            v = float(p)
+        except ValueError:
+            print(f"[Error] --zoom-factors 含非法浮点数: {p}", file=sys.stderr)
+            sys.exit(1)
+        if v <= 0:
+            print(f"[Error] --zoom-factors 每项必须 > 0: {p}", file=sys.stderr)
+            sys.exit(1)
+        out.append(v)
+    return out
+
+def parse_zoom_positions(arg: str):
+    s = str(arg).strip()
+    if not s:
+        return []
+    valid = {"tl", "tr", "bl", "br"}
+    out = []
+    for p in [x.strip().lower() for x in s.split(",") if x.strip()]:
+        if p not in valid:
+            print(f"[Error] --zoom-poses 含非法位置: {p}，必须是 tl/tr/bl/br", file=sys.stderr)
+            sys.exit(1)
+        out.append(p)
+    return out
+
+def build_zoom_positions(base_pos: str, n: int):
+    if n <= 0:
+        return []
+    orders = {
+        "tl": ["tl", "tr", "bl", "br"],
+        "tr": ["tr", "tl", "br", "bl"],
+        "bl": ["bl", "br", "tl", "tr"],
+        "br": ["br", "bl", "tr", "tl"],
+    }
+    seq = orders.get(base_pos, ["br", "bl", "tr", "tl"])
+    return [seq[i % len(seq)] for i in range(n)]
+
+def build_zoom_items(zoom_rois, base_pos="br", base_factor=2.0, factors=None, poses=None):
+    if not zoom_rois:
+        return []
+    factors = factors or []
+    poses = poses or []
+    auto_pos = build_zoom_positions(base_pos, len(zoom_rois))
+    items = []
+    for i, roi in enumerate(zoom_rois):
+        pos = poses[i] if i < len(poses) else auto_pos[i]
+        factor = factors[i] if i < len(factors) else float(base_factor)
+        items.append({"roi": roi, "pos": pos, "factor": factor})
+    return items
+
+def pick_zoom_color(idx: int, total: int, single_color):
+    if total <= 1:
+        return single_color
+    return ZOOM_COLOR_PALETTE[idx % len(ZOOM_COLOR_PALETTE)]
 
 def pick_zoom_roi_interactive(names, col_best_path, pick_stem=""):
     if not names:
@@ -116,7 +213,7 @@ def pick_sample_image(names, col_best_path, pick_stem=""):
                 return stem, p, im
     return None, None, None
 
-def write_web_roi_picker(sample_stem, sample_path: Path, sample_img, out_dir: Path):
+def write_web_roi_picker(sample_stem, sample_path: Path, sample_img, out_dir: Path, default_pos="br", default_factor=2.0, default_border=2):
     out_dir.mkdir(parents=True, exist_ok=True)
     picker_path = out_dir / "roi_picker.html"
     sample_web_name = "_roi_picker_sample.png"
@@ -142,29 +239,57 @@ button { padding:6px 10px; cursor:pointer; }
 </head><body>
 <div id="wrap">
   <h3>ROI Picker (sample stem: __SAMPLE_STEM__)</h3>
-  <div id="hint">鼠标拖拽框选 ROI，自动输出 <code>x,y,w,h</code>（原图坐标）。</div>
+  <div id="hint">鼠标拖拽可连续框选多个 ROI；每个 ROI 可单独设置位置与放大倍数。</div>
   <div id="imgBox">
     <img id="img" src="__SAMPLE_SRC__">
     <div id="sel"></div>
   </div>
   <div id="bar">
-    <span>--zoom-roi</span>
-    <input id="roi" value="" readonly>
+    <button id="clearBtn">清空 ROI</button>
     <button id="copyBtn">复制</button>
     <button id="saveBtn">保存到配置</button>
     <span id="saveInfo" style="color:#9ad;"></span>
   </div>
+  <div style="margin-top:10px;color:#bbb;font-size:13px;">拖框后会自动新增一行；可修改每行位置与倍率。</div>
+  <table id="roiTable" style="width:100%;margin-top:8px;border-collapse:collapse;font-size:13px;">
+    <thead><tr style="color:#aaa;">
+      <th style="text-align:left;padding:4px 6px;border-bottom:1px solid #333;">#</th>
+      <th style="text-align:left;padding:4px 6px;border-bottom:1px solid #333;">ROI (x,y,w,h)</th>
+      <th style="text-align:left;padding:4px 6px;border-bottom:1px solid #333;">位置</th>
+      <th style="text-align:left;padding:4px 6px;border-bottom:1px solid #333;">倍率</th>
+      <th style="text-align:left;padding:4px 6px;border-bottom:1px solid #333;">操作</th>
+    </tr></thead>
+    <tbody id="roiBody"></tbody>
+  </table>
+  <div style="margin-top:14px;color:#bbb;font-size:13px;">小眼睛预览（实时，模拟最终布局）</div>
+  <canvas id="previewCanvas" style="margin-top:8px;border:1px solid #333;max-width:95vw;"></canvas>
+  <div id="previewInfo" style="margin-top:6px;color:#bbb;font-size:12px;"></div>
 </div>
 <script>
 const img = document.getElementById('img');
 const box = document.getElementById('imgBox');
 const sel = document.getElementById('sel');
-const roi = document.getElementById('roi');
+const roiBody = document.getElementById('roiBody');
+const clearBtn = document.getElementById('clearBtn');
 const copyBtn = document.getElementById('copyBtn');
 const saveBtn = document.getElementById('saveBtn');
 const saveInfo = document.getElementById('saveInfo');
+const previewCanvas = document.getElementById('previewCanvas');
+const previewInfo = document.getElementById('previewInfo');
 let dragging = false;
 let sx = 0, sy = 0, ex = 0, ey = 0;
+let roiItems = [];
+const POS = ['tl','tr','bl','br'];
+const COLOR_PALETTE = ['#00ffff', '#00ff00', '#ff00ff', '#ffff00', '#ff8000', '#0080ff'];
+const AUTO_POS = {
+  tl: ['tl','tr','bl','br'],
+  tr: ['tr','tl','br','bl'],
+  bl: ['bl','br','tl','tr'],
+  br: ['br','bl','tr','tl'],
+};
+const defaultPos = '__DEFAULT_POS__';
+const defaultFactor = Number('__DEFAULT_FACTOR__') || 2.0;
+const defaultBorder = Number('__DEFAULT_BORDER__') || 2;
 
 function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 function boxPos(evt) {
@@ -183,33 +308,151 @@ function drawSel() {
   sel.style.width = w + 'px';
   sel.style.height = h + 'px';
 }
-function updateROI() {
+function currentROIArray() {
   const x1 = Math.min(sx, ex), y1 = Math.min(sy, ey);
   const w1 = Math.abs(ex - sx), h1 = Math.abs(ey - sy);
-  if (w1 < 2 || h1 < 2) { roi.value = ''; return; }
+  if (w1 < 2 || h1 < 2) { return null; }
   const rx = img.naturalWidth / img.clientWidth;
   const ry = img.naturalHeight / img.clientHeight;
   const X = Math.round(x1 * rx);
   const Y = Math.round(y1 * ry);
   const W = Math.round(w1 * rx);
   const H = Math.round(h1 * ry);
-  roi.value = `${X},${Y},${W},${H}`;
+  if (W <= 0 || H <= 0) return null;
+  return [X, Y, W, H];
 }
-function currentROIArray() {
-  if (!roi.value) return null;
-  const parts = roi.value.split(',').map(v => Number(v.trim()));
-  if (parts.length !== 4 || parts.some(v => !Number.isInteger(v))) return null;
-  if (parts[2] <= 0 || parts[3] <= 0) return null;
-  return parts;
+
+function autoPos(idx) {
+  const seq = AUTO_POS[defaultPos] || AUTO_POS.br;
+  return seq[idx % seq.length];
 }
+
+function addROI(arr) {
+  const idx = roiItems.length;
+  roiItems.push({ roi: arr, pos: autoPos(idx), factor: defaultFactor });
+  renderROIItems();
+}
+
+function removeROI(idx) {
+  roiItems.splice(idx, 1);
+  renderROIItems();
+}
+
+function renderROIItems() {
+  roiBody.innerHTML = '';
+  roiItems.forEach((it, i) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td style="padding:4px 6px;border-bottom:1px solid #222;">${i + 1}</td>
+      <td style="padding:4px 6px;border-bottom:1px solid #222;">${it.roi.join(',')}</td>
+      <td style="padding:4px 6px;border-bottom:1px solid #222;">
+        <select data-i="${i}" data-k="pos" style="background:#1d1d1d;color:#fff;border:1px solid #555;">
+          ${POS.map(p => `<option value="${p}" ${it.pos===p?'selected':''}>${p}</option>`).join('')}
+        </select>
+      </td>
+      <td style="padding:4px 6px;border-bottom:1px solid #222;">
+        <input data-i="${i}" data-k="factor" value="${it.factor}" style="width:80px;background:#1d1d1d;color:#fff;border:1px solid #555;">
+      </td>
+      <td style="padding:4px 6px;border-bottom:1px solid #222;">
+        <button data-i="${i}" data-k="del">删除</button>
+      </td>
+    `;
+    roiBody.appendChild(tr);
+  });
+  drawPreview();
+}
+
+function syncItemsFromInputs() {
+  roiBody.querySelectorAll('select[data-k="pos"]').forEach(el => {
+    const i = Number(el.dataset.i);
+    if (roiItems[i]) roiItems[i].pos = el.value;
+  });
+  roiBody.querySelectorAll('input[data-k="factor"]').forEach(el => {
+    const i = Number(el.dataset.i);
+    const v = Number(el.value);
+    if (roiItems[i] && Number.isFinite(v) && v > 0) roiItems[i].factor = v;
+  });
+}
+
+function rectOverlap(a, b) {
+  return !(a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y);
+}
+
+function computeInsetRect(item, W, H) {
+  const [x0, y0, w0, h0] = item.roi;
+  const x = Math.max(0, Math.min(x0, W - 1));
+  const y = Math.max(0, Math.min(y0, H - 1));
+  const rw = Math.max(1, Math.min(w0, W - x));
+  const rh = Math.max(1, Math.min(h0, H - y));
+  let iw = Math.max(24, Math.round(rw * Number(item.factor || defaultFactor)));
+  let ih = Math.max(24, Math.round(rh * Number(item.factor || defaultFactor)));
+  const margin = Math.max(6, defaultBorder + 3);
+  const maxIw = Math.max(24, W - 2 * margin);
+  const maxIh = Math.max(24, H - 2 * margin);
+  if (iw > maxIw || ih > maxIh) {
+    const s = Math.min(maxIw / Math.max(1, iw), maxIh / Math.max(1, ih));
+    iw = Math.max(24, Math.round(iw * s));
+    ih = Math.max(24, Math.round(ih * s));
+  }
+  let ix = margin, iy = margin;
+  if (item.pos === 'tr') { ix = W - iw - margin; iy = margin; }
+  else if (item.pos === 'bl') { ix = margin; iy = H - ih - margin; }
+  else if (item.pos === 'br') { ix = W - iw - margin; iy = H - ih - margin; }
+  ix = Math.max(0, Math.min(ix, W - iw));
+  iy = Math.max(0, Math.min(iy, H - ih));
+  return { roi: {x, y, w: rw, h: rh}, inset: {x: ix, y: iy, w: iw, h: ih} };
+}
+
+function drawPreview() {
+  if (!img.complete || !img.naturalWidth || !img.naturalHeight) return;
+  syncItemsFromInputs();
+  const W = img.naturalWidth, H = img.naturalHeight;
+  const maxW = 780, maxH = 420;
+  const s = Math.min(maxW / W, maxH / H, 1.0);
+  const cw = Math.max(1, Math.round(W * s));
+  const ch = Math.max(1, Math.round(H * s));
+  previewCanvas.width = cw;
+  previewCanvas.height = ch;
+  const ctx = previewCanvas.getContext('2d');
+  ctx.clearRect(0, 0, cw, ch);
+  ctx.drawImage(img, 0, 0, cw, ch);
+  ctx.save();
+  ctx.scale(s, s);
+  ctx.lineWidth = Math.max(1, defaultBorder);
+  const insetRects = [];
+  roiItems.forEach((it, i) => {
+    const strokeColor = roiItems.length <= 1 ? '#00ffff' : COLOR_PALETTE[i % COLOR_PALETTE.length];
+    const g = computeInsetRect(it, W, H);
+    insetRects.push(g.inset);
+    ctx.strokeStyle = strokeColor;
+    ctx.strokeRect(g.roi.x, g.roi.y, g.roi.w, g.roi.h);
+    ctx.drawImage(img, g.roi.x, g.roi.y, g.roi.w, g.roi.h, g.inset.x, g.inset.y, g.inset.w, g.inset.h);
+    ctx.strokeRect(g.inset.x, g.inset.y, g.inset.w, g.inset.h);
+  });
+  ctx.restore();
+  if (!roiItems.length) {
+    previewInfo.textContent = '尚未添加 ROI。';
+    return;
+  }
+  let overlap = 0;
+  for (let i = 0; i < insetRects.length; i++) {
+    for (let j = i + 1; j < insetRects.length; j++) {
+      if (rectOverlap(insetRects[i], insetRects[j])) overlap++;
+    }
+  }
+  previewInfo.textContent = overlap > 0
+    ? `注意：检测到 ${overlap} 组放大窗重叠，请调整位置或倍率。`
+    : '当前放大窗无重叠。';
+}
+
 async function saveConfig() {
-  const arr = currentROIArray();
-  if (!arr) return;
+  syncItemsFromInputs();
+  if (!roiItems.length) { saveInfo.textContent = '请先框选 ROI'; return; }
   try {
     const resp = await fetch('/save-roi', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ zoom_roi: arr, sample_stem: '__SAMPLE_STEM__' })
+      body: JSON.stringify({ zoom_items: roiItems, sample_stem: '__SAMPLE_STEM__' })
     });
     if (!resp.ok) throw new Error('save failed');
     const data = await resp.json();
@@ -222,32 +465,60 @@ box.addEventListener('mousedown', (e) => {
   if (e.button !== 0) return;
   const p = boxPos(e);
   dragging = true; sx = ex = p.x; sy = ey = p.y;
-  drawSel(); updateROI();
+  drawSel();
 });
 window.addEventListener('mousemove', (e) => {
   if (!dragging) return;
   const p = boxPos(e);
   ex = p.x; ey = p.y;
-  drawSel(); updateROI();
+  drawSel();
 });
 window.addEventListener('mouseup', () => {
   if (!dragging) return;
   dragging = false;
-  drawSel(); updateROI();
-  saveConfig();
+  drawSel();
+  const arr = currentROIArray();
+  if (arr) addROI(arr);
+  sel.style.display = 'none';
 });
 copyBtn.addEventListener('click', async () => {
-  if (!roi.value) return;
+  if (!roiItems.length) return;
+  const s = roiItems.map(it => it.roi.join(',')).join(';');
   try {
-    await navigator.clipboard.writeText(roi.value);
+    await navigator.clipboard.writeText(s);
     copyBtn.textContent = '已复制';
     setTimeout(() => copyBtn.textContent = '复制', 900);
   } catch (_) {}
 });
+clearBtn.addEventListener('click', () => {
+  roiItems = [];
+  renderROIItems();
+});
+roiBody.addEventListener('change', (e) => {
+  const t = e.target;
+  if (!(t instanceof HTMLElement)) return;
+  if (t.dataset.k === 'pos' || t.dataset.k === 'factor') drawPreview();
+});
+roiBody.addEventListener('input', (e) => {
+  const t = e.target;
+  if (!(t instanceof HTMLElement)) return;
+  if (t.dataset.k === 'factor') drawPreview();
+});
+roiBody.addEventListener('click', (e) => {
+  const t = e.target;
+  if (!(t instanceof HTMLElement)) return;
+  if (t.dataset.k === 'del') {
+    removeROI(Number(t.dataset.i));
+  }
+});
 saveBtn.addEventListener('click', saveConfig);
+img.addEventListener('load', drawPreview);
 </script>
 </body></html>"""
     html = html.replace("__SAMPLE_STEM__", str(sample_stem))
+    html = html.replace("__DEFAULT_POS__", str(default_pos))
+    html = html.replace("__DEFAULT_FACTOR__", str(float(default_factor)))
+    html = html.replace("__DEFAULT_BORDER__", str(int(default_border)))
     if sample_web_path.exists():
         html = html.replace("__SAMPLE_SRC__", sample_web_name)
     else:
@@ -257,26 +528,78 @@ saveBtn.addEventListener('click', saveConfig);
 
 def load_zoom_roi_config(config_path: Path):
     if not config_path.exists():
-        return None
+        return []
     try:
         data = json.loads(config_path.read_text(encoding="utf-8"))
     except Exception:
-        return None
-    roi = data.get("zoom_roi")
-    if not (isinstance(roi, list) and len(roi) == 4):
-        return None
-    try:
-        x, y, w, h = [int(v) for v in roi]
-    except (TypeError, ValueError):
-        return None
-    if w <= 0 or h <= 0:
-        return None
-    return (x, y, w, h)
+        return []
+    items = []
+    if isinstance(data.get("zoom_items"), list):
+        for item in data.get("zoom_items"):
+            if not isinstance(item, dict):
+                continue
+            roi = item.get("roi")
+            pos = str(item.get("pos", "br")).lower()
+            fac = item.get("factor", 2.0)
+            if not (isinstance(roi, list) and len(roi) == 4):
+                continue
+            try:
+                x, y, w, h = [int(v) for v in roi]
+                fac = float(fac)
+            except (TypeError, ValueError):
+                continue
+            if w > 0 and h > 0 and fac > 0 and pos in {"tl", "tr", "bl", "br"}:
+                items.append({"roi": (x, y, w, h), "pos": pos, "factor": fac})
+    if items:
+        return items
 
-def save_zoom_roi_config(config_path: Path, zoom_roi, sample_stem=""):
-    x, y, w, h = [int(v) for v in zoom_roi]
+    rois = []
+    if isinstance(data.get("zoom_rois"), list):
+        for item in data.get("zoom_rois"):
+            if isinstance(item, list) and len(item) == 4:
+                try:
+                    x, y, w, h = [int(v) for v in item]
+                except (TypeError, ValueError):
+                    continue
+                if w > 0 and h > 0:
+                    rois.append((x, y, w, h))
+    if rois:
+        return build_zoom_items(rois, base_pos="br", base_factor=2.0)
+    roi = data.get("zoom_roi")
+    if isinstance(roi, list) and len(roi) == 4:
+        try:
+            x, y, w, h = [int(v) for v in roi]
+        except (TypeError, ValueError):
+            return []
+        if w > 0 and h > 0:
+            return build_zoom_items([(x, y, w, h)], base_pos="br", base_factor=2.0)
+    return []
+
+def save_zoom_items_config(config_path: Path, zoom_items, sample_stem=""):
+    norm_items = []
+    for item in (zoom_items or []):
+        roi = item.get("roi") if isinstance(item, dict) else None
+        pos = str(item.get("pos", "br")).lower() if isinstance(item, dict) else "br"
+        fac = item.get("factor", 2.0) if isinstance(item, dict) else 2.0
+        if not (isinstance(roi, (list, tuple)) and len(roi) == 4):
+            continue
+        try:
+            x, y, w, h = [int(v) for v in roi]
+            fac = float(fac)
+        except (TypeError, ValueError):
+            continue
+        if w <= 0 or h <= 0 or fac <= 0 or pos not in {"tl", "tr", "bl", "br"}:
+            continue
+        norm_items.append({"roi": [x, y, w, h], "pos": pos, "factor": fac})
+
+    if not norm_items:
+        return
+
+    x, y, w, h = norm_items[0]["roi"]
     payload = {
         "zoom_roi": [x, y, w, h],
+        "zoom_rois": [it["roi"] for it in norm_items],
+        "zoom_items": norm_items,
         "zoom_roi_str": f"{x},{y},{w},{h}",
         "sample_stem": str(sample_stem or ""),
         "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -335,21 +658,43 @@ class Handler(SimpleHTTPRequestHandler):
         except Exception:
             self._reply_json(400, {'ok': False, 'error': 'invalid json'})
             return
-        roi = payload.get('zoom_roi')
-        if not (isinstance(roi, list) and len(roi) == 4):
-            self._reply_json(400, {'ok': False, 'error': 'zoom_roi must be [x,y,w,h]'})
-            return
-        try:
-            x, y, w, h = [int(v) for v in roi]
-        except Exception:
-            self._reply_json(400, {'ok': False, 'error': 'zoom_roi must be ints'})
-            return
-        if w <= 0 or h <= 0:
-            self._reply_json(400, {'ok': False, 'error': 'w/h must be > 0'})
-            return
+        items = []
+        if isinstance(payload.get('zoom_items'), list):
+            for it in payload.get('zoom_items'):
+                if not isinstance(it, dict):
+                    continue
+                roi = it.get('roi')
+                pos = str(it.get('pos', 'br')).lower()
+                fac = it.get('factor', 2.0)
+                if not (isinstance(roi, list) and len(roi) == 4):
+                    continue
+                try:
+                    x, y, w, h = [int(v) for v in roi]
+                    fac = float(fac)
+                except Exception:
+                    continue
+                if w > 0 and h > 0 and fac > 0 and pos in {'tl','tr','bl','br'}:
+                    items.append({'roi': [x, y, w, h], 'pos': pos, 'factor': fac})
+        if not items:
+            roi = payload.get('zoom_roi')
+            if not (isinstance(roi, list) and len(roi) == 4):
+                self._reply_json(400, {'ok': False, 'error': 'zoom_items or zoom_roi required'})
+                return
+            try:
+                x, y, w, h = [int(v) for v in roi]
+            except Exception:
+                self._reply_json(400, {'ok': False, 'error': 'zoom_roi must be ints'})
+                return
+            if w <= 0 or h <= 0:
+                self._reply_json(400, {'ok': False, 'error': 'w/h must be > 0'})
+                return
+            items = [{'roi': [x, y, w, h], 'pos': 'br', 'factor': 2.0}]
         sample_stem = str(payload.get('sample_stem') or '')
+        x, y, w, h = items[0]['roi']
         data = {
             'zoom_roi': [x, y, w, h],
+            'zoom_rois': [it['roi'] for it in items],
+            'zoom_items': items,
             'zoom_roi_str': f'{x},{y},{w},{h}',
             'sample_stem': sample_stem,
             'updated_at': time.strftime('%Y-%m-%d %H:%M:%S'),
@@ -422,35 +767,10 @@ def apply_zoom_inset(img, roi, inset_pos="br", border=2, color=(0, 255, 255), zo
     cv2.rectangle(out, (ix, iy), (ix + iw, iy + ih), (0, 0, 0), max(1, border + 1), cv2.LINE_AA)
     cv2.rectangle(out, (ix, iy), (ix + iw, iy + ih), color, max(1, border), cv2.LINE_AA)
 
-    # 连接两个框“最近的一对顶角”，避免中心连线穿过关注区域
-    roi_corners = [
-        (x, y),                 # tl
-        (x + rw, y),            # tr
-        (x, y + rh),            # bl
-        (x + rw, y + rh),       # br
-    ]
-    inset_corners = [
-        (ix, iy),               # tl
-        (ix + iw, iy),          # tr
-        (ix, iy + ih),          # bl
-        (ix + iw, iy + ih),     # br
-    ]
-    best_pair = None
-    best_d2 = None
-    for p1 in roi_corners:
-        for p2 in inset_corners:
-            dx = p1[0] - p2[0]
-            dy = p1[1] - p2[1]
-            d2 = dx * dx + dy * dy
-            if best_d2 is None or d2 < best_d2:
-                best_d2 = d2
-                best_pair = (p1, p2)
-    if best_pair is not None:
-        cv2.line(out, best_pair[0], best_pair[1], color, max(1, border), cv2.LINE_AA)
     return out
 
 def tile_images(images, labels, cols=0, pad=8, bg=18, sep=2, font_scale=0.6, label_scale_mult=1.25, label_color=(0, 255, 255),
-                ref_short_side=512.0, zoom_roi=None, zoom_pos="br", zoom_border=2, zoom_factor=2.5):
+                ref_short_side=512.0, zoom_items=None, zoom_border=2):
     valid = [im for im in images if im is not None]
     if not valid: return None
     th, tw = valid[0].shape[:2]
@@ -463,9 +783,15 @@ def tile_images(images, labels, cols=0, pad=8, bg=18, sep=2, font_scale=0.6, lab
         else:
             if im.shape[:2] != (th, tw):
                 im = cv2.resize(im, (tw, th), interpolation=cv2.INTER_AREA)
-            if zoom_roi is not None:
-                im = apply_zoom_inset(im, zoom_roi, inset_pos=zoom_pos,
-                                      border=zoom_border, color=label_color, zoom_factor=zoom_factor)
+            if zoom_items:
+                total_items = len(zoom_items)
+                for i, it in enumerate(zoom_items):
+                    roi = it.get("roi")
+                    pos = it.get("pos", "br")
+                    factor = it.get("factor", 2.0)
+                    zoom_color = pick_zoom_color(i, total_items, label_color)
+                    im = apply_zoom_inset(im, roi, inset_pos=pos,
+                                          border=zoom_border, color=zoom_color, zoom_factor=factor)
         normed.append(im)
     normed = [
         draw_label(im, lbl, font_scale, pad//2, label_scale_mult=label_scale_mult, label_color=label_color,
@@ -578,19 +904,19 @@ def build_stem_index(dir_path: Path, exts_priority):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--root", type=str, default="/home/ykx/ca-fusion-loss/results/ablation",
+    ap.add_argument("--root", type=str, default=USER_COMMON_DEFAULTS["root"],
                     help="方法结果根目录（包含各方法子目录）")
-    ap.add_argument("--methods", nargs="*", default=[],
+    ap.add_argument("--methods", nargs="*", default=USER_COMMON_DEFAULTS["methods"],
                     help="方法子目录显示顺序；留空=自动发现并按字母序")
-    ap.add_argument("--my-method", type=str, default='ours:/home/ykx/ca-fusion-loss/results/MSRS/ours',
+    ap.add_argument("--my-method", type=str, default=USER_COMMON_DEFAULTS["my_method"],
                     help="追加到最后一列的方法，格式 '标签:目录'")
-    ap.add_argument("--ref", action="append", default=['IR:/data/ykx/MSRS/test/ir', 'VIS:/data/ykx/MSRS/test/vi'],
+    ap.add_argument("--ref", action="append", default=USER_COMMON_DEFAULTS["ref"],
                     help="新增参考列：格式 '标签:目录'，可重复两次，例如 "
                          "--ref 'IR:/data/IR' --ref 'VIS:/data/VIS'")
     ap.add_argument("--exts", nargs="*", default=[".png",".jpg",".jpeg",".bmp"],
                     help="允许的扩展名（含优先级，前者优先）；大小写不敏感")
     ap.add_argument("--out-dir", type=str, default="output")
-    ap.add_argument("--cols", type=int, default=5)
+    ap.add_argument("--cols", type=int, default=USER_COMMON_DEFAULTS["cols"])
     ap.add_argument("--font-scale", type=float, default=0.6)
     ap.add_argument("--pad", type=int, default=8)
     ap.add_argument("--sep", type=int, default=2)
@@ -603,10 +929,10 @@ def main():
                     help="方法名标签颜色：颜色名（yellow/white/red/green/blue/cyan/magenta/black）或 R,G,B")
     ap.add_argument("--stem-title-mult", type=float, default=1.0,
                     help="底部 stem 标题条（如 00123D [1/10]）高度与字号倍率，<1 更扁更小，例如 0.65")
-    ap.add_argument("--only-stems", nargs="*", default=['00931N'],
+    ap.add_argument("--only-stems", nargs="*", default=USER_COMMON_DEFAULTS["only_stems"],
                     help="仅导出指定 stem（不含扩展名）")
     ap.add_argument("--zoom-roi", type=str, default="",
-                    help="局部放大 ROI，格式 x,y,w,h（像素），例如 120,80,64,64；留空=关闭放大")
+                    help="局部放大 ROI：单个 x,y,w,h，或多个以 ';' 分隔（如 120,80,64,64;300,200,40,40）")
     ap.add_argument("--pick-zoom-roi", action="store_true",
                     help="交互式框选 ROI（鼠标拖拽），优先级高于 --zoom-roi")
     ap.add_argument("--pick-zoom-roi-web", action="store_true",
@@ -619,10 +945,14 @@ def main():
                     help="ROI 配置文件路径（默认 out-dir/zoom_roi.json）")
     ap.add_argument("--ignore-zoom-roi-config", action="store_true",
                     help="忽略 ROI 配置文件，不自动读取")
-    ap.add_argument("--zoom-pos", type=str, default="bl", choices=["tl", "tr", "bl", "br"],
+    ap.add_argument("--zoom-pos", type=str, default=USER_COMMON_DEFAULTS["zoom_pos"], choices=["tl", "tr", "bl", "br"],
                     help="放大窗位置：tl/tr/bl/br")
-    ap.add_argument("--zoom-factor", type=float, default=2,
+    ap.add_argument("--zoom-factor", type=float, default=1.8,
                     help="固定放大倍数（>1 时放大更明显）")
+    ap.add_argument("--zoom-poses", type=str, default="",
+                    help="多 ROI 的位置列表（逗号分隔），如 br,tl；留空则按 --zoom-pos 自动分配")
+    ap.add_argument("--zoom-factors", type=str, default=USER_COMMON_DEFAULTS["zoom_factors"],
+                    help="多 ROI 的倍率列表（逗号分隔），如 2.0,3.0；留空则用 --zoom-factor")
     ap.add_argument("--zoom-border", type=int, default=2,
                     help="ROI 与放大窗边框粗细")
     ap.add_argument("--strict-intersection", action="store_true",
@@ -630,14 +960,23 @@ def main():
     args = ap.parse_args()
 
     label_color = parse_label_color_arg(args.label_color)
-    zoom_roi = parse_zoom_roi(args.zoom_roi)
+    zoom_rois = parse_zoom_rois(args.zoom_roi)
+    zoom_factors = parse_zoom_factors(args.zoom_factors)
+    zoom_poses = parse_zoom_positions(args.zoom_poses)
+    zoom_items = build_zoom_items(zoom_rois, base_pos=args.zoom_pos, base_factor=args.zoom_factor,
+                                  factors=zoom_factors, poses=zoom_poses)
     out = Path(args.out_dir)
     zoom_cfg = Path(args.zoom_roi_config) if str(args.zoom_roi_config).strip() else (out / "zoom_roi.json")
-    if zoom_roi is None and (not args.ignore_zoom_roi_config):
-        cfg_roi = load_zoom_roi_config(zoom_cfg)
-        if cfg_roi is not None:
-            zoom_roi = cfg_roi
-            print(f"[INFO] 已读取 ROI 配置：{zoom_cfg} -> {cfg_roi[0]},{cfg_roi[1]},{cfg_roi[2]},{cfg_roi[3]}")
+    if (not zoom_items) and (not args.ignore_zoom_roi_config):
+        cfg_items = load_zoom_roi_config(zoom_cfg)
+        if cfg_items:
+            zoom_items = cfg_items
+            preview = "; ".join([
+                f"{it['roi'][0]},{it['roi'][1]},{it['roi'][2]},{it['roi'][3]}@{it['pos']}x{it['factor']:.2f}"
+                for it in cfg_items[:3]
+            ])
+            more = " ..." if len(cfg_items) > 3 else ""
+            print(f"[INFO] 已读取 ROI 配置：{zoom_cfg} -> {preview}{more}")
 
     root = Path(args.root)
     if not root.is_dir():
@@ -696,7 +1035,9 @@ def main():
         sample_stem, sample_path, sample_img = pick_sample_image(names, col_best_path, pick_stem=args.pick_stem)
         if sample_path is None:
             print("[Error] 没有可用于网页选框的有效图片", file=sys.stderr); sys.exit(1)
-        picker_path = write_web_roi_picker(sample_stem, sample_path, sample_img, out)
+        picker_path = write_web_roi_picker(sample_stem, sample_path, sample_img, out,
+                                           default_pos=args.zoom_pos, default_factor=args.zoom_factor,
+                                           default_border=args.zoom_border)
         url, started, real_port = start_roi_picker_server(picker_path, zoom_cfg, preferred_port=args.web_port)
         print(f"[OK] 已生成网页选框器：{picker_path}")
         print(f"[CFG] ROI 将自动保存到：{zoom_cfg}")
@@ -706,19 +1047,22 @@ def main():
                 print(f"[WARN] 端口 {args.web_port} 被占用，已自动改用 {real_port}")
         else:
             print(f"[OPEN] {url}  （服务启动失败，请检查端口或环境）")
-        print("[NEXT] 浏览器拖框后会自动写配置；下次直接运行 compare_viewer.py 即可")
+        print("[NEXT] 浏览器可连续拖框并逐条调位置/倍率，点“保存到配置”后，下次直接运行 compare_viewer.py 即可")
         return
     if args.pick_zoom_roi:
         try:
             zoom_roi = pick_zoom_roi_interactive(names, col_best_path, pick_stem=args.pick_stem)
             if zoom_roi is not None:
-                save_zoom_roi_config(zoom_cfg, zoom_roi, sample_stem=args.pick_stem)
+                zoom_items = build_zoom_items([zoom_roi], base_pos=args.zoom_pos, base_factor=args.zoom_factor)
+                save_zoom_items_config(zoom_cfg, zoom_items, sample_stem=args.pick_stem)
                 print(f"[INFO] 已写入 ROI 配置：{zoom_cfg}")
         except SystemExit:
             sample_stem, sample_path, sample_img = pick_sample_image(names, col_best_path, pick_stem=args.pick_stem)
             if sample_path is None:
                 raise
-            picker_path = write_web_roi_picker(sample_stem, sample_path, sample_img, out)
+            picker_path = write_web_roi_picker(sample_stem, sample_path, sample_img, out,
+                                               default_pos=args.zoom_pos, default_factor=args.zoom_factor,
+                                               default_border=args.zoom_border)
             url, started, real_port = start_roi_picker_server(picker_path, zoom_cfg, preferred_port=args.web_port)
             print(f"[OK] 检测到无 GUI 环境，已自动生成网页选框器：{picker_path}")
             print(f"[CFG] ROI 将自动保存到：{zoom_cfg}")
@@ -728,7 +1072,7 @@ def main():
                     print(f"[WARN] 端口 {args.web_port} 被占用，已自动改用 {real_port}")
             else:
                 print(f"[OPEN] {url}  （服务启动失败，请检查端口或环境）")
-            print("[NEXT] 浏览器拖框后会自动写配置；下次直接运行 compare_viewer.py 即可")
+            print("[NEXT] 浏览器可连续拖框并逐条调位置/倍率，点“保存到配置”后，下次直接运行 compare_viewer.py 即可")
             return
 
     out.mkdir(parents=True, exist_ok=True)
@@ -746,9 +1090,8 @@ def main():
         panel = tile_images(ims, labels, cols=args.cols, pad=args.pad,
                             bg=args.bg_gray, sep=args.sep, font_scale=args.font_scale,
                             label_scale_mult=args.label_scale, label_color=label_color,
-                            ref_short_side=args.label_ref_side, zoom_roi=zoom_roi,
-                            zoom_pos=args.zoom_pos,
-                            zoom_border=args.zoom_border, zoom_factor=args.zoom_factor)
+                            ref_short_side=args.label_ref_side, zoom_items=zoom_items,
+                            zoom_border=args.zoom_border)
         if panel is None:
             # 所有列都缺就跳过
             continue
