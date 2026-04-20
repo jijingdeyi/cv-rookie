@@ -223,12 +223,12 @@ if __name__ == "__main__":
 
     # --- 路径与配置 ---
     Method = "ours"  # 仅用于写入列首和文件名
-    ir_dir = os.path.join("/data/ykx/FMB/test", "ir")
-    vi_dir = os.path.join("/data/ykx/FMB/test", "vi")
-    f_dir = os.path.join("/home/ykx/ca-fusion-loss/results/FMB/ours")  # 融合结果所在目录
+    ir_dir = os.path.join("/data/ykx/OpIVF/test", "ir")
+    vi_dir = os.path.join("/data/ykx/OpIVF/test", "vi")
+    f_dir = os.path.join("/home/ykx/ca-fusion-loss/results/OpIVF/ours")  # 融合结果所在目录
     save_dir = os.path.join("/home/ykx/ca-fusion-loss", "metric")
     os.makedirs(save_dir, exist_ok=True)
-    metric_save_name = os.path.join(save_dir, f"fmb.xlsx")
+    metric_save_name = os.path.join(save_dir, f"OpIVF.xlsx")
 
     # --- 计算指标 ---
     EN_list, MI_list, SF_list, AG_list, SD_list = [], [], [], [], []
